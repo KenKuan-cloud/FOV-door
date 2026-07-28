@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wing Door Sensor FOV Tool — v1 (Phase 1)</title>
+<!-- =====================================================================
+  Wing Door Sensor FOV Analysis Tool
+  SRS WDS-FOV-SRS-001, Draft 0.1 — Phase 1 (Static FOV) implementation.
+  Single self-contained file: no dependencies, no build step, fully offline.
+  Section banners below mark the internal modules described in the plan.
+====================================================================== -->
+<style>
+/* ============================ 1. STYLES ============================ */
+:root{
+  --bg:#0f1216; --panel:#171c23; --panel2:#1f2630; --line:#2b3644;
+  --ink:#e6edf3; --muted:#93a1b0; --accent:#4da3ff;
+  --green:#39d353; --yellow:#e3b341; --red:#f85149; --orange:#ff9800;
+  --gray:#6e7681; --blue:#4da3ff; --purple:#a371f7;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:13px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:8px 14px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0;font-weight:600}
+header .rev{color:var(--muted);font-size:11px}
+header .spacer{flex:1}
+button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#04121f;border-color:var(--accent);font-weight:600}
+.layout{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 47px)}
+.side{background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:6px;border-bottom:1px solid var(--line)}
+.tabs button{padding:5px 8px;font-size:11px}
+.tabs button.active{background:var(--accent);color:#04121f;border-color:var(--accent)}
+.panels{overflow-y:auto;padding:12px;flex:1;min-height:0}
+.panel{display:none}
+.panel.active{display:block}
+.panel h2{font-size:13px;margin:0 0 10px;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.04em}
+.field{margin-bottom:9px}
+.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}
+.field input,.field select,.field textarea{width:100%;background:var(--panel2);
+  color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:6px}
+.row{display:flex;gap:8px}
+.row .field{flex:1}
+.hint{color:var(--muted);font-size:11px;margin:6px 0 10px}
+.main{display:flex;flex-direction:column;min-height:0}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.toolbar .grp{display:flex;align-items:center;gap:6px}
+.toolbar label{color:var(--muted);font-size:11px}
+#doorPct{width:150px}
+.canvas-wrap{position:relative;flex:1;min-height:0;background:#0a0d11}
+canvas{display:block;width:100%;height:100%}
+.legend{position:absolute;top:10px;right:10px;background:rgba(23,28,35,.9);
+  border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px}
+.legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+.results{height:190px;background:var(--panel);border-top:1px solid var(--line);
+  overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:11px}
+th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel2);z-index:1}
+tr.blind{background:rgba(248,81,73,.10)}
+td select,td input{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:4px;padding:2px 4px;font-size:11px}
+.badge{padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600}
+.b-pass{background:rgba(57,211,83,.2);color:var(--green)}
+.b-fail{background:rgba(248,81,73,.2);color:var(--red)}
+.b-cond{background:rgba(227,179,65,.2);color:var(--yellow)}
+.b-nt{background:rgba(110,118,129,.25);color:var(--gray)}
+.list-item{background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+  padding:8px;margin-bottom:8px}
+.list-item .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.list-item .top strong{font-size:12px}
+.mini{font-size:10px;color:var(--muted)}
+.dash{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px}
+.stat .n{font-size:20px;font-weight:700}
+.stat .l{font-size:10px;color:var(--muted);text-transform:uppercase}
+.danger{color:var(--red)}
+a.dl{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Wing Door Sensor FOV Tool</h1>
+  <span class="rev">WDS-FOV-SRS-001 · Phase 1 (Static FOV)</span>
+  <span class="spacer"></span>
+  <button onclick="newProject()">New</button>
+  <button onclick="importJson()">Open (JSON)</button>
+  <button onclick="exportJson()">Save (JSON)</button>
+  <button onclick="exportCsv()">Export CSV</button>
+  <button onclick="exportPng()">Export PNG</button>
+  <button class="primary" onclick="openReport()">Report</button>
+</header>
+
+<div class="layout">
+  <!-- ------------------------- CONTROL PANEL ------------------------- -->
+  <div class="side">
+    <div class="tabs" id="tabs">
+      <button data-tab="project" class="active">Project</button>
+      <button data-tab="door">Door</button>
+      <button data-tab="sensor">Sensors</button>
+      <button data-tab="obstacle">Obstacles</button>
+      <button data-tab="test">Test Points</button>
+      <button data-tab="dash">Dashboard</button>
+    </div>
+    <div class="panels">
+
+      <!-- Page 1: Project -->
+      <div class="panel active" data-tab="project">
+        <h2>Project Information</h2>
+        <div class="field"><label>Project name</label><input id="p_name"></div>
+        <div class="row">
+          <div class="field"><label>Vehicle model</label><input id="p_vehicle"></div>
+          <div class="field"><label>Customer</label><input id="p_customer"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Door side</label>
+            <select id="p_side"><option value="LH">Left (LH)</option><option value="RH">Right (RH)</option></select></div>
+          <div class="field"><label>Prepared by</label><input id="p_by"></div>
+        </div>
+        <div class="field"><label>Test date</label><input id="p_date" type="date"></div>
+        <div class="field"><label>Notes</label><textarea id="p_notes" rows="3"></textarea></div>
+      </div>
+
+      <!-- Page 2: Door -->
+      <div class="panel" data-tab="door">
+        <h2>Vehicle &amp; Door Setup</h2>
+        <p class="hint">Top-view (X&nbsp;forward, Y&nbsp;left). Simplified single-axis
+          hinge rotation. Door leaf extends from the hinge; height is vertical
+          (not shown in top view).</p>
+        <div class="row">
+          <div class="field"><label>Hinge X (mm)</label><input id="d_hx" type="number"></div>
+          <div class="field"><label>Hinge Y (mm)</label><input id="d_hy" type="number"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Leaf width from hinge (mm)</label><input id="d_w" type="number"></div>
+          <div class="field"><label>Thickness (mm)</label><input id="d_t" type="number"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Door height (mm)</label><input id="d_h" type="number"></div>
+          <div class="field"><label>Max opening angle (°)</label><input id="d_max" type="number"></div>
+        </div>
+        <div class="field"><label>Closed orientation (° from +X)</label><input id="d_base" type="number"></div>
+        <p class="hint">Door positions 0–100% in 10% steps are generated
+          automatically (11 positions, criterion&nbsp;4). Use the door slider above
+          the canvas to view any position.</p>
+      </div>
+
+      <!-- Page 3: Sensors -->
+      <div class="panel" data-tab="sensor">
+        <h2>Sensor Setup</h2>
+        <p class="hint">Position &amp; orientation are in the <b>door-local</b> frame
+          (origin = hinge). The sensor moves and rotates with the door.</p>
+        <button class="primary" onclick="addSensor()">+ Add sensor</button>
+        <div id="sensorList" style="margin-top:10px"></div>
+      </div>
+
+      <!-- Page 4: Obstacles -->
+      <div class="panel" data-tab="obstacle">
+        <h2>Obstacle Setup</h2>
+        <p class="hint">Obstacle positions are in the <b>vehicle</b> frame.</p>
+        <button class="primary" onclick="addObstacle()">+ Add obstacle</button>
+        <div id="obstacleList" style="margin-top:10px"></div>
+      </div>
+
+      <!-- Page 5: Test points -->
+      <div class="panel" data-tab="test">
+        <h2>Static FOV Test Points</h2>
+        <p class="hint">Enable “Add point on click”, then click the canvas — a test
+          point is created at the current door position, and its in-FOV status
+          (PASS/FAIL) is computed automatically. Points can also be added manually.</p>
+        <div class="field"><label>Obstacle type for new points</label>
+          <select id="tp_obs"></select></div>
+        <div class="row">
+          <div class="field"><label>X (mm)</label><input id="tp_x" type="number" value="800"></div>
+          <div class="field"><label>Y (mm)</label><input id="tp_y" type="number" value="600"></div>
+          <div class="field"><label>Z (mm)</label><input id="tp_z" type="number" value="1000"></div>
+        </div>
+        <button onclick="addTestPointManual()">+ Add test point (manual)</button>
+        <button onclick="clearTestPoints()">Clear all</button>
+        <p class="hint" style="margin-top:12px">Blind points (inside the door swept
+          envelope but outside the sensor FOV, criterion&nbsp;12) are highlighted red
+          in the table below.</p>
+      </div>
+
+      <!-- Dashboard -->
+      <div class="panel" data-tab="dash">
+        <h2>Dashboard</h2>
+        <div class="dash" id="dashGrid"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ------------------------- MAIN VIEW ------------------------- -->
+  <div class="main">
+    <div class="toolbar">
+      <div class="grp">
+        <label>Door position</label>
+        <input type="range" id="doorPct" min="0" max="100" step="10" value="0">
+        <span id="doorPctVal" class="mini">0%</span>
+        <span id="doorAngVal" class="mini"></span>
+      </div>
+      <div class="grp">
+        <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
+        <label><input type="checkbox" id="showGhost" checked> Ghost outlines</label>
+        <label><input type="checkbox" id="clickAdd"> Add point on click</label>
+      </div>
+      <div class="grp">
+        <button onclick="resetView()">Reset view</button>
+        <span class="mini">wheel = zoom · drag = pan</span>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="cv"></canvas>
+      <div class="legend">
+        <div><span class="sw" style="background:var(--purple)"></span>Door swept volume</div>
+        <div><span class="sw" style="background:var(--blue)"></span>Theoretical FOV</div>
+        <div><span class="sw" style="background:var(--green)"></span>Detected / PASS</div>
+        <div><span class="sw" style="background:var(--red)"></span>No detect / FAIL</div>
+        <div><span class="sw" style="background:var(--gray)"></span>Not tested</div>
+      </div>
+    </div>
+    <div class="results">
+      <table id="tpTable">
+        <thead><tr>
+          <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
+          <th>X</th><th>Y</th><th>Z</th><th>In FOV</th><th>Blind</th>
+          <th>Result</th><th>Comments</th><th></th>
+        </tr></thead>
+        <tbody id="tpBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ====================== 2. STATE MODEL ====================== */
+const OBSTACLE_TYPES = ["Flat wall","Pole","Cylinder","Child-size object",
+  "Adult-size object","Vehicle","Garage wall","Garage ceiling","Hanging object",
+  "Shopping cart","Bicycle","Low concrete block","Narrow metal pole",
+  "Soft object","Custom obstacle"];
+const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
+  "Capacitive proximity","Generic distance"];
+
+let project, seq = {s:0,o:0,t:0};
+
+function defaultProject(){
+  return {
+    schemaVersion:1,
+    project:{ name:"New FOV Study", vehicleModel:"", customer:"",
+      doorSide:"LH", preparedBy:"", testDate:new Date().toISOString().slice(0,10), notes:"" },
+    door:{ hingeX:0, hingeY:0, widthMm:1000, thicknessMm:60, heightMm:1200,
+      maxOpenDeg:70, baseAngleDeg:0, positionsPct:[0,10,20,30,40,50,60,70,80,90,100] },
+    sensors:[ demoSensor() ],
+    obstacles:[ { id:"O1", type:"Narrow metal pole", x:1300, y:700, z:1000, width:60, height:1200 } ],
+    testPoints:[],
+    view:{ doorPct:0, zoom:0.10, panX:0, panY:0 }
+  };
+}
+function demoSensor(){
+  return { id:"S1", name:"Upper outer edge", type:"Ultrasonic",
+    partNo:"", serialNo:"", posX:1000, posY:0, posZ:1600, yawDeg:0,
+    hFovDeg:90, vFovDeg:60, minRangeMm:100, maxRangeMm:1500,
+    accuracyMm:10, updateRateHz:20, latencyMs:50,
+    warningMm:800, stopMm:300, shape:"Fan", active:true };
+}
+
+/* ====================== 3. GEOMETRY ENGINE ======================
+   All pure functions. Vehicle frame: X forward, Y left (top view). */
+const deg2rad = d => d*Math.PI/180;
+const rad2deg = r => r*180/Math.PI;
+
+function rotate2D(p, ang, pivot){
+  const c=Math.cos(ang), s=Math.sin(ang);
+  const dx=p.x-pivot.x, dy=p.y-pivot.y;
+  return { x:pivot.x + dx*c - dy*s, y:pivot.y + dx*s + dy*c };
+}
+// 0% -> 0deg, 100% -> maxOpen. Sign: LH opens +CCW, RH opens -CW.
+function doorAngleForPercent(pct, door, side){
+  const sign = side==="RH" ? -1 : 1;
+  return sign * (pct/100) * door.maxOpenDeg;
+}
+// World rotation applied to the door leaf at a given opening angle (deg).
+function doorWorldAngleRad(openDeg, door){
+  return deg2rad(door.baseAngleDeg + openDeg);
+}
+// Door leaf rectangle corners in vehicle frame at an opening angle (deg).
+function doorCornersAtAngle(door, openDeg){
+  const hinge={x:door.hingeX, y:door.hingeY};
+  const t=door.thicknessMm/2, w=door.widthMm;
+  const local=[{x:0,y:-t},{x:w,y:-t},{x:w,y:t},{x:0,y:t}]; // local: X out from hinge
+  const ang=doorWorldAngleRad(openDeg, door);
+  return local.map(p=>rotate2D({x:hinge.x+p.x,y:hinge.y+p.y}, ang, hinge));
+}
+// Sensor pose (position + facing angle rad) in vehicle frame at opening angle.
+function sensorPoseAtAngle(sensor, door, openDeg){
+  const hinge={x:door.hingeX, y:door.hingeY};
+  const ang=doorWorldAngleRad(openDeg, door);
+  const pos=rotate2D({x:hinge.x+sensor.posX, y:hinge.y+sensor.posY}, ang, hinge);
+  const facing=ang + deg2rad(sensor.yawDeg); // sensor +X = main sensing dir
+  return { x:pos.x, y:pos.y, facing };
+}
+// Build FOV polygon (fan / cone) for a sensor pose. Returns vehicle-frame points.
+function fovPolygon(pose, hFovDeg, minRange, maxRange, segs=24){
+  const half=deg2rad(hFovDeg/2);
+  const a0=pose.facing-half, a1=pose.facing+half;
+  const outer=[], inner=[];
+  for(let i=0;i<=segs;i++){
+    const a=a0+(a1-a0)*i/segs;
+    outer.push({x:pose.x+Math.cos(a)*maxRange, y:pose.y+Math.sin(a)*maxRange});
+  }
+  if(minRange>1){
+    for(let i=segs;i>=0;i--){
+      const a=a0+(a1-a0)*i/segs;
+      inner.push({x:pose.x+Math.cos(a)*minRange, y:pose.y+Math.sin(a)*minRange});
+    }
+    return outer.concat(inner);
+  }
+  return [{x:pose.x,y:pose.y}].concat(outer);
+}
+// Ray-casting point-in-polygon.
+function pointInPolygon(pt, poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x, yi=poly[i].y, xj=poly[j].x, yj=poly[j].y;
+    const hit=((yi>pt.y)!==(yj>pt.y)) &&
+      (pt.x < (xj-xi)*(pt.y-yi)/(yj-yi)+xi);
+    if(hit) inside=!inside;
+  }
+  return inside;
+}
+// True if the point lies within any active sensor's FOV at the given door %.
+function isInAnyFov(pt, doorPct){
+  for(const s of project.sensors){
+    if(!s.active) continue;
+    const pose=sensorPoseAtAngle(s, project.door, doorAngleForPercent(doorPct, project.door, project.project.doorSide));
+    const poly=fovPolygon(pose, s.hFovDeg, s.minRangeMm, s.maxRangeMm);
+    if(pointInPolygon(pt, poly)) return s.id;
+  }
+  return null;
+}
+// Andrew's monotone-chain convex hull.
+function convexHull(pts){
+  const p=pts.slice().sort((a,b)=>a.x-b.x||a.y-b.y);
+  if(p.length<3) return p;
+  const cross=(o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
+  const lo=[],hi=[];
+  for(const q of p){ while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],q)<=0)lo.pop(); lo.push(q); }
+  for(let i=p.length-1;i>=0;i--){ const q=p[i]; while(hi.length>=2&&cross(hi[hi.length-2],hi[hi.length-1],q)<=0)hi.pop(); hi.push(q); }
+  lo.pop(); hi.pop(); return lo.concat(hi);
+}
+// Approximate door swept envelope = convex hull of all corners across positions.
+function sweptEnvelopePolygon(door, side){
+  let all=[];
+  for(const pct of door.positionsPct){
+    all=all.concat(doorCornersAtAngle(door, doorAngleForPercent(pct, door, side)));
+  }
+  return convexHull(all);
+}
+
+/* ====================== 4. RENDERING ====================== */
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+let W=0,H=0,DPR=1;
+function resizeCanvas(){
+  DPR=window.devicePixelRatio||1;
+  const r=cv.parentElement.getBoundingClientRect();
+  W=r.width; H=r.height;
+  cv.width=W*DPR; cv.height=H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  render();
+}
+function worldToScreen(p){
+  const s=project.view.zoom;
+  return { x:W/2 + project.view.panX + (-p.y)*s,
+           y:H/2 + project.view.panY + (-p.x)*s };
+}
+function screenToWorld(sx,sy){
+  const s=project.view.zoom;
+  return { y:-(sx - W/2 - project.view.panX)/s,
+           x:-(sy - H/2 - project.view.panY)/s };
+}
+function polyPath(poly){
+  ctx.beginPath();
+  poly.forEach((p,i)=>{const q=worldToScreen(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y);});
+  ctx.closePath();
+}
+function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+
+function drawGrid(){
+  ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
+  const step=500, s=project.view.zoom; // 500 mm grid
+  ctx.strokeStyle="#161b22"; ctx.lineWidth=1;
+  const originS=worldToScreen({x:0,y:0});
+  const spanX=W/s, spanY=H/s;
+  ctx.beginPath();
+  for(let gx=-Math.ceil(spanY/step)*step; gx<=spanY; gx+=step){
+    const a=worldToScreen({x:gx,y:-spanX}), b=worldToScreen({x:gx,y:spanX});
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+  }
+  for(let gy=-Math.ceil(spanX/step)*step; gy<=spanX; gy+=step){
+    const a=worldToScreen({x:-spanY,y:gy}), b=worldToScreen({x:spanY,y:gy});
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+  }
+  ctx.stroke();
+  // axes
+  ctx.strokeStyle="#30363d"; ctx.lineWidth=1.5; ctx.beginPath();
+  const ax=worldToScreen({x:2000,y:0}), ax0=worldToScreen({x:-500,y:0});
+  const ay=worldToScreen({x:0,y:2000}), ay0=worldToScreen({x:0,y:-500});
+  ctx.moveTo(ax0.x,ax0.y); ctx.lineTo(ax.x,ax.y);
+  ctx.moveTo(ay0.x,ay0.y); ctx.lineTo(ay.x,ay.y); ctx.stroke();
+  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+  ctx.fillText("+X fwd", ax.x-8, ax.y-6);
+  ctx.fillText("+Y left", ay.x+6, ay.y+4);
+  // vehicle reference origin
+  ctx.fillStyle=cssVar("--muted");
+  ctx.beginPath(); ctx.arc(originS.x,originS.y,3,0,7); ctx.fill();
+}
+function fillPoly(poly,fill,stroke,lw){
+  polyPath(poly);
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1.5;ctx.stroke();}
+}
+function drawDoor(openDeg,style){
+  const c=doorCornersAtAngle(project.door,openDeg);
+  fillPoly(c, style.fill, style.stroke, style.lw);
+}
+function drawHinge(){
+  const q=worldToScreen({x:project.door.hingeX,y:project.door.hingeY});
+  ctx.fillStyle="#fff"; ctx.strokeStyle="#000";
+  ctx.beginPath(); ctx.arc(q.x,q.y,5,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+  ctx.fillText("hinge", q.x+8, q.y-6);
+}
+function drawSensor(s,openDeg){
+  if(!s.active) return;
+  const pose=sensorPoseAtAngle(s,project.door,openDeg);
+  const poly=fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm);
+  fillPoly(poly,"rgba(77,163,255,.13)","rgba(77,163,255,.55)",1);
+  const p=worldToScreen(pose);
+  // facing arrow
+  const tip=worldToScreen({x:pose.x+Math.cos(pose.facing)*400,y:pose.y+Math.sin(pose.facing)*400});
+  ctx.strokeStyle=cssVar("--accent"); ctx.lineWidth=2; ctx.beginPath();
+  ctx.moveTo(p.x,p.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
+  ctx.fillStyle=cssVar("--accent");
+  ctx.beginPath(); ctx.arc(p.x,p.y,4,0,7); ctx.fill();
+  ctx.fillStyle=cssVar("--ink"); ctx.font="11px sans-serif";
+  ctx.fillText(s.id, p.x+7, p.y-7);
+}
+function drawObstacles(){
+  for(const o of project.obstacles){
+    const q=worldToScreen({x:o.x,y:o.y});
+    ctx.fillStyle=cssVar("--orange");
+    ctx.fillRect(q.x-5,q.y-5,10,10);
+    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+    ctx.fillText(o.id, q.x+8, q.y+4);
+  }
+}
+function drawTestPoints(){
+  for(const tp of project.testPoints){
+    const q=worldToScreen({x:tp.x,y:tp.y});
+    const col = tp.result==="PASS"?cssVar("--green")
+      : tp.result==="FAIL"?cssVar("--red")
+      : tp.result==="CONDITIONAL PASS"?cssVar("--yellow")
+      : cssVar("--gray");
+    ctx.beginPath(); ctx.arc(q.x,q.y,5,0,7);
+    ctx.fillStyle=col; ctx.fill();
+    if(tp.blind){ ctx.strokeStyle=cssVar("--red"); ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(q.x,q.y,8,0,7); ctx.stroke(); }
+  }
+}
+function render(){
+  if(!project) return;
+  const side=project.project.doorSide;
+  const openDeg=doorAngleForPercent(project.view.doorPct,project.door,side);
+  drawGrid();
+  if(document.getElementById("showSwept").checked){
+    fillPoly(sweptEnvelopePolygon(project.door,side),
+      "rgba(163,113,247,.10)","rgba(163,113,247,.5)",1);
+  }
+  if(document.getElementById("showGhost").checked){
+    drawDoor(doorAngleForPercent(0,project.door,side),{stroke:"rgba(230,237,243,.25)",lw:1});
+    drawDoor(doorAngleForPercent(100,project.door,side),{stroke:"rgba(230,237,243,.25)",lw:1});
+  }
+  drawDoor(openDeg,{fill:"rgba(230,237,243,.10)",stroke:"#e6edf3",lw:2});
+  drawHinge();
+  project.sensors.forEach(s=>drawSensor(s,openDeg));
+  drawObstacles();
+  drawTestPoints();
+}
+
+/* ====================== 5. UI PANELS / BINDING ====================== */
+function $(id){return document.getElementById(id);}
+function bindTabs(){
+  $("tabs").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b) return;
+    document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
+    if(b.dataset.tab==="dash") renderDashboard();
+  });
+}
+// ---- Project fields ----
+function bindProject(){
+  const map={p_name:"name",p_vehicle:"vehicleModel",p_customer:"customer",
+    p_side:"doorSide",p_by:"preparedBy",p_date:"testDate",p_notes:"notes"};
+  for(const id in map){
+    $(id).addEventListener("input",()=>{ project.project[map[id]]=$(id).value;
+      if(id==="p_side") recomputeAll(); render(); });
+  }
+}
+function loadProjectFields(){
+  const p=project.project;
+  $("p_name").value=p.name; $("p_vehicle").value=p.vehicleModel;
+  $("p_customer").value=p.customer; $("p_side").value=p.doorSide;
+  $("p_by").value=p.preparedBy; $("p_date").value=p.testDate; $("p_notes").value=p.notes;
+}
+// ---- Door fields ----
+function bindDoor(){
+  const map={d_hx:"hingeX",d_hy:"hingeY",d_w:"widthMm",d_t:"thicknessMm",
+    d_h:"heightMm",d_max:"maxOpenDeg",d_base:"baseAngleDeg"};
+  for(const id in map){
+    $(id).addEventListener("input",()=>{ project.door[map[id]]=parseFloat($(id).value)||0;
+      recomputeAll(); render(); });
+  }
+}
+function loadDoorFields(){
+  const d=project.door;
+  $("d_hx").value=d.hingeX; $("d_hy").value=d.hingeY; $("d_w").value=d.widthMm;
+  $("d_t").value=d.thicknessMm; $("d_h").value=d.heightMm; $("d_max").value=d.maxOpenDeg;
+  $("d_base").value=d.baseAngleDeg;
+}
+// ---- Sensors ----
+function addSensor(){
+  seq.s=Math.max(seq.s, project.sensors.length);
+  const s=demoSensor(); s.id="S"+(++seq.s); s.name="Sensor "+s.id;
+  project.sensors.push(s); renderSensorList(); recomputeAll(); render();
+}
+function removeSensor(id){
+  project.sensors=project.sensors.filter(s=>s.id!==id);
+  renderSensorList(); recomputeAll(); render();
+}
+function renderSensorList(){
+  const el=$("sensorList"); el.innerHTML="";
+  project.sensors.forEach(s=>{
+    const d=document.createElement("div"); d.className="list-item";
+    d.innerHTML=`
+      <div class="top"><strong>${s.id}</strong>
+        <span><label class="mini"><input type="checkbox" ${s.active?"checked":""} data-k="active"> active</label>
+        <button onclick="removeSensor('${s.id}')">✕</button></span></div>
+      <div class="field"><label>Name</label><input data-k="name" value="${s.name}"></div>
+      <div class="row">
+        <div class="field"><label>Type</label><select data-k="type">${
+          SENSOR_TYPES.map(t=>`<option ${t===s.type?"selected":""}>${t}</option>`).join("")}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Pos X (mm)</label><input type="number" data-k="posX" value="${s.posX}"></div>
+        <div class="field"><label>Pos Y (mm)</label><input type="number" data-k="posY" value="${s.posY}"></div>
+        <div class="field"><label>Pos Z (mm)</label><input type="number" data-k="posZ" value="${s.posZ}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Yaw (°)</label><input type="number" data-k="yawDeg" value="${s.yawDeg}"></div>
+        <div class="field"><label>H-FOV (°)</label><input type="number" data-k="hFovDeg" value="${s.hFovDeg}"></div>
+        <div class="field"><label>V-FOV (°)</label><input type="number" data-k="vFovDeg" value="${s.vFovDeg}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Min range (mm)</label><input type="number" data-k="minRangeMm" value="${s.minRangeMm}"></div>
+        <div class="field"><label>Max range (mm)</label><input type="number" data-k="maxRangeMm" value="${s.maxRangeMm}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Warning (mm)</label><input type="number" data-k="warningMm" value="${s.warningMm}"></div>
+        <div class="field"><label>Stop (mm)</label><input type="number" data-k="stopMm" value="${s.stopMm}"></div>
+      </div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        const k=inp.dataset.k;
+        s[k] = inp.type==="checkbox"?inp.checked : (inp.type==="number"?parseFloat(inp.value)||0:inp.value);
+        recomputeAll(); render();
+      });
+    });
+    el.appendChild(d);
+  });
+}
+// ---- Obstacles ----
+function addObstacle(){
+  seq.o=Math.max(seq.o, project.obstacles.length);
+  const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:1000,width:60,height:1000};
+  project.obstacles.push(o); renderObstacleList(); refreshObstacleSelect(); render();
+}
+function removeObstacle(id){
+  project.obstacles=project.obstacles.filter(o=>o.id!==id);
+  renderObstacleList(); refreshObstacleSelect(); render();
+}
+function renderObstacleList(){
+  const el=$("obstacleList"); el.innerHTML="";
+  project.obstacles.forEach(o=>{
+    const d=document.createElement("div"); d.className="list-item";
+    d.innerHTML=`
+      <div class="top"><strong>${o.id}</strong><button onclick="removeObstacle('${o.id}')">✕</button></div>
+      <div class="field"><label>Type</label><select data-k="type">${
+        OBSTACLE_TYPES.map(t=>`<option ${t===o.type?"selected":""}>${t}</option>`).join("")}</select></div>
+      <div class="row">
+        <div class="field"><label>X</label><input type="number" data-k="x" value="${o.x}"></div>
+        <div class="field"><label>Y</label><input type="number" data-k="y" value="${o.y}"></div>
+        <div class="field"><label>Z</label><input type="number" data-k="z" value="${o.z}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Width</label><input type="number" data-k="width" value="${o.width}"></div>
+        <div class="field"><label>Height</label><input type="number" data-k="height" value="${o.height}"></div>
+      </div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        const k=inp.dataset.k;
+        o[k]= inp.type==="number"?parseFloat(inp.value)||0:inp.value;
+        refreshObstacleSelect(); render();
+      });
+    });
+    el.appendChild(d);
+  });
+}
+function refreshObstacleSelect(){
+  const sel=$("tp_obs"); const cur=sel.value;
+  sel.innerHTML=project.obstacles.map(o=>`<option value="${o.id}">${o.id} — ${o.type}</option>`).join("");
+  if(cur) sel.value=cur;
+}
+
+/* ---- Test points ---- */
+function makeTpId(doorPct,z,x,y){
+  const side=project.project.doorSide;
+  const pad=(n,w)=>String(Math.round(Math.abs(n))).padStart(w,"0");
+  seq.t++;
+  return `${side}-D${pad(doorPct,2)}-Z${pad(z,3)}-X${pad(x,3)}-Y${pad(y,3)}-P${pad(seq.t,2)}`;
+}
+function addTestPoint(x,y,z,obsId){
+  const doorPct=project.view.doorPct;
+  const tp={ id:makeTpId(doorPct,z,x,y), x,y,z, doorPct,
+    obstacleId:obsId||(project.obstacles[0]&&project.obstacles[0].id)||"",
+    sensorId:null, inFov:false, blind:false, result:"", comments:"" };
+  project.testPoints.push(tp);
+  evaluateTestPoint(tp);
+  renderTpTable(); render();
+}
+function addTestPointManual(){
+  addTestPoint(parseFloat($("tp_x").value)||0, parseFloat($("tp_y").value)||0,
+    parseFloat($("tp_z").value)||0, $("tp_obs").value);
+}
+function clearTestPoints(){
+  if(project.testPoints.length && !confirm("Clear all test points?")) return;
+  project.testPoints=[]; renderTpTable(); render();
+}
+// Auto in-FOV + blind evaluation (criteria 9 & 12).
+function evaluateTestPoint(tp){
+  const sid=isInAnyFov({x:tp.x,y:tp.y}, tp.doorPct);
+  tp.sensorId=sid; tp.inFov=!!sid;
+  const inSwept=pointInPolygon({x:tp.x,y:tp.y},
+    sweptEnvelopePolygon(project.door,project.project.doorSide));
+  tp.blind = inSwept && !tp.inFov;
+  if(tp.result!=="CONDITIONAL PASS" && !tp._manual){
+    tp.result = tp.inFov ? "PASS" : "FAIL";
+  }
+}
+function recomputeAll(){ project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
+
+function renderTpTable(){
+  const body=$("tpBody"); body.innerHTML="";
+  project.testPoints.forEach(tp=>{
+    const tr=document.createElement("tr");
+    if(tp.blind) tr.className="blind";
+    const rb = tp.result==="PASS"?"b-pass":tp.result==="FAIL"?"b-fail":
+      tp.result==="CONDITIONAL PASS"?"b-cond":"b-nt";
+    tr.innerHTML=`
+      <td>${tp.id}</td><td>${tp.doorPct}%</td>
+      <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
+      <td>${Math.round(tp.x)}</td><td>${Math.round(tp.y)}</td><td>${Math.round(tp.z)}</td>
+      <td>${tp.inFov?"YES":"no"}</td>
+      <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
+      <td><select data-k="result">
+        ${["","PASS","CONDITIONAL PASS","FAIL"].map(r=>`<option ${r===tp.result?"selected":""}>${r||"—"}</option>`).join("")}
+      </select></td>
+      <td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>
+      <td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
+    tr.querySelector("[data-k='result']").addEventListener("change",e=>{
+      tp.result=e.target.value==="—"?"":e.target.value; tp._manual=true; render(); renderTpTable();
+    });
+    tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
+    body.appendChild(tr);
+  });
+}
+
+/* ---- Dashboard (Section 22 subset) ---- */
+function renderDashboard(){
+  const tps=project.testPoints;
+  const total=tps.length;
+  const tested=tps.filter(t=>t.result).length;
+  const pass=tps.filter(t=>t.result==="PASS").length;
+  const fail=tps.filter(t=>t.result==="FAIL").length;
+  const cond=tps.filter(t=>t.result==="CONDITIONAL PASS").length;
+  const blind=tps.filter(t=>t.blind).length;
+  const cov= total? Math.round(pass/total*100):0;
+  const g=(n,l,cls)=>`<div class="stat"><div class="n ${cls||''}">${n}</div><div class="l">${l}</div></div>`;
+  $("dashGrid").innerHTML=
+    g(total,"Total points")+g(tested,"Tested")+
+    g(pass,"Passed","")+g(fail,"Failed",fail?"danger":"")+
+    g(cond,"Conditional")+g(blind,"Blind points",blind?"danger":"")+
+    g(cov+"%","Detection coverage")+g(project.sensors.filter(s=>s.active).length,"Active sensors");
+}
+
+/* ====================== 6. IMPORT / EXPORT ====================== */
+function download(name,content,type){
+  const blob=new Blob([content],{type:type||"text/plain"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function exportJson(){
+  download((project.project.name||"project").replace(/\s+/g,"_")+".json",
+    JSON.stringify(project,null,2),"application/json");
+}
+function importJson(){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept=".json,application/json";
+  inp.onchange=()=>{ const f=inp.files[0]; if(!f)return;
+    const rd=new FileReader();
+    rd.onload=()=>{ try{ const data=JSON.parse(rd.result);
+        project = Object.assign(defaultProject(), data); // preserve unknown fields
+        project.project = Object.assign(defaultProject().project, data.project||{});
+        project.door = Object.assign(defaultProject().door, data.door||{});
+        project.view = Object.assign(defaultProject().view, data.view||{});
+        seq={s:project.sensors.length,o:project.obstacles.length,t:project.testPoints.length};
+        loadAllUi(); recomputeAll(); render();
+      }catch(e){ alert("Invalid JSON: "+e.message); } };
+    rd.readAsText(f); };
+  inp.click();
+}
+function exportCsv(){
+  const cols=["Test_Point_ID","Sensor_ID","Door_Position_Percent","Obstacle_Type",
+    "Obstacle_X_mm","Obstacle_Y_mm","Obstacle_Z_mm","In_FOV","Blind_Zone","Result","Comments"];
+  const rows=[cols.join(",")];
+  for(const tp of project.testPoints){
+    const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
+    const line=[tp.id, tp.sensorId||"", tp.doorPct, obs?obs.type:"",
+      Math.round(tp.x), Math.round(tp.y), Math.round(tp.z),
+      tp.inFov?"YES":"NO", tp.blind?"YES":"NO", tp.result,
+      '"'+(tp.comments||"").replace(/"/g,'""')+'"'];
+    rows.push(line.join(","));
+  }
+  download((project.project.name||"testmatrix").replace(/\s+/g,"_")+"_testmatrix.csv",
+    rows.join("\n"),"text/csv");
+}
+function exportPng(){
+  cv.toBlob(b=>{ const a=document.createElement("a");
+    a.href=URL.createObjectURL(b); a.download="fov_view.png"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
+}
+function openReport(){
+  const png=cv.toDataURL("image/png");
+  const p=project.project, d=project.door;
+  const tps=project.testPoints;
+  const pass=tps.filter(t=>t.result==="PASS").length;
+  const fail=tps.filter(t=>t.result==="FAIL").length;
+  const blind=tps.filter(t=>t.blind).length;
+  const sensorRows=project.sensors.map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.type}</td>
+    <td>${s.hFovDeg}°/${s.vFovDeg}°</td><td>${s.minRangeMm}–${s.maxRangeMm} mm</td>
+    <td>${s.posX},${s.posY},${s.posZ}</td></tr>`).join("");
+  const tpRows=tps.map(t=>`<tr><td>${t.id}</td><td>${t.doorPct}%</td><td>${t.sensorId||"—"}</td>
+    <td>${Math.round(t.x)},${Math.round(t.y)},${Math.round(t.z)}</td>
+    <td>${t.inFov?"YES":"NO"}</td><td>${t.blind?"YES":""}</td><td>${t.result||"—"}</td></tr>`).join("");
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>FOV Report — ${p.name}</title><style>
+    body{font:13px/1.5 Arial;margin:32px;color:#111}
+    h1{font-size:20px} h2{font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px}
+    table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
+    th,td{border:1px solid #999;padding:5px 8px;text-align:left}
+    th{background:#eee} img{max-width:100%;border:1px solid #ccc}
+    .kv td:first-child{width:180px;color:#555} @media print{button{display:none}}
+    </style></head><body>
+    <button onclick="print()">Print / Save as PDF</button>
+    <h1>Wing Door Sensor FOV Report</h1>
+    <h2>1. Project Information</h2>
+    <table class="kv">
+      <tr><td>Project</td><td>${p.name}</td></tr>
+      <tr><td>Vehicle model</td><td>${p.vehicleModel||"—"}</td></tr>
+      <tr><td>Customer</td><td>${p.customer||"—"}</td></tr>
+      <tr><td>Door side</td><td>${p.doorSide}</td></tr>
+      <tr><td>Prepared by</td><td>${p.preparedBy||"—"}</td></tr>
+      <tr><td>Test date</td><td>${p.testDate||"—"}</td></tr>
+      <tr><td>Notes</td><td>${p.notes||"—"}</td></tr></table>
+    <h2>2. Door Definition</h2>
+    <table class="kv">
+      <tr><td>Hinge (X,Y)</td><td>${d.hingeX}, ${d.hingeY} mm</td></tr>
+      <tr><td>Leaf width / thickness</td><td>${d.widthMm} / ${d.thicknessMm} mm</td></tr>
+      <tr><td>Height</td><td>${d.heightMm} mm</td></tr>
+      <tr><td>Max opening angle</td><td>${d.maxOpenDeg}°</td></tr>
+      <tr><td>Positions</td><td>${d.positionsPct.join(", ")} %</td></tr></table>
+    <h2>3. Sensor Specification</h2>
+    <table><tr><th>ID</th><th>Name</th><th>Type</th><th>FOV (H/V)</th><th>Range</th><th>Pos (X,Y,Z)</th></tr>${sensorRows}</table>
+    <h2>4. Static FOV Visualization</h2>
+    <p>Door at ${project.view.doorPct}% opening.</p><img src="${png}">
+    <h2>5. Summary</h2>
+    <table class="kv">
+      <tr><td>Total test points</td><td>${tps.length}</td></tr>
+      <tr><td>Passed</td><td>${pass}</td></tr>
+      <tr><td>Failed</td><td>${fail}</td></tr>
+      <tr><td>Blind points</td><td>${blind}</td></tr></table>
+    <h2>6. Test Point Details</h2>
+    <table><tr><th>ID</th><th>Door%</th><th>Sensor</th><th>Pos (X,Y,Z)</th><th>In FOV</th><th>Blind</th><th>Result</th></tr>${tpRows}</table>
+    <p style="margin-top:30px;color:#888;font-size:11px">Generated by Wing Door Sensor FOV Tool · ${new Date().toLocaleString()}</p>
+    </body></html>`;
+  const w=window.open("","_blank"); w.document.write(html); w.document.close();
+}
+
+/* ====================== 7. INIT / EVENTS ====================== */
+function loadAllUi(){
+  loadProjectFields(); loadDoorFields();
+  renderSensorList(); renderObstacleList(); refreshObstacleSelect();
+  renderTpTable();
+  $("doorPct").value=project.view.doorPct;
+  updateDoorPctLabel();
+}
+function updateDoorPctLabel(){
+  $("doorPctVal").textContent=project.view.doorPct+"%";
+  const ang=doorAngleForPercent(project.view.doorPct,project.door,project.project.doorSide);
+  $("doorAngVal").textContent="("+ang.toFixed(1)+"°)";
+}
+function newProject(){
+  if(!confirm("Start a new project? Unsaved data will be lost.")) return;
+  project=defaultProject(); seq={s:1,o:1,t:0}; loadAllUi(); recomputeAll(); render();
+}
+function resetView(){ project.view.zoom=0.10; project.view.panX=0; project.view.panY=0; render(); }
+
+function bindCanvas(){
+  cv.addEventListener("wheel",e=>{ e.preventDefault();
+    const f=e.deltaY<0?1.1:1/1.1;
+    project.view.zoom=Math.max(0.01,Math.min(2,project.view.zoom*f)); render();
+  },{passive:false});
+  let drag=null;
+  cv.addEventListener("mousedown",e=>{
+    if($("clickAdd").checked){
+      const r=cv.getBoundingClientRect();
+      const w=screenToWorld(e.clientX-r.left,e.clientY-r.top);
+      addTestPoint(Math.round(w.x),Math.round(w.y),parseFloat($("tp_z").value)||1000,$("tp_obs").value);
+      return;
+    }
+    drag={x:e.clientX,y:e.clientY,px:project.view.panX,py:project.view.panY};
+  });
+  window.addEventListener("mousemove",e=>{ if(!drag)return;
+    project.view.panX=drag.px+(e.clientX-drag.x);
+    project.view.panY=drag.py+(e.clientY-drag.y); render();
+  });
+  window.addEventListener("mouseup",()=>drag=null);
+}
+function bindToolbar(){
+  $("doorPct").addEventListener("input",()=>{
+    project.view.doorPct=parseInt($("doorPct").value,10);
+    updateDoorPctLabel(); recomputeAll(); render();
+  });
+  ["showSwept","showGhost"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
+}
+
+/* ---- §27 validation self-tests (logged to console) ---- */
+function runSelfTests(){
+  const approx=(a,b,t=1)=>Math.abs(a-b)<=t;
+  const d={hingeX:0,hingeY:0,widthMm:1000,thicknessMm:60,heightMm:1200,maxOpenDeg:90,baseAngleDeg:0,positionsPct:[0,50,100]};
+  const results=[];
+  // Case 3: sensor at hinge stays at hinge for any angle.
+  let pose=sensorPoseAtAngle({posX:0,posY:0,yawDeg:0},d,45);
+  results.push(["3 sensor at hinge fixed", approx(pose.x,0)&&approx(pose.y,0)]);
+  // Case 2/4: sensor away from hinge, 90° left -> (0, +width) approx.
+  pose=sensorPoseAtAngle({posX:1000,posY:0,yawDeg:0},d,90);
+  results.push(["2/4 single-axis rotation 90°", approx(pose.x,0)&&approx(pose.y,1000)]);
+  // Case 5: point on FOV centerline mid-range is IN.
+  const s=demoSensor(); const p0=sensorPoseAtAngle(s,d,0);
+  const poly=fovPolygon(p0,s.hFovDeg,s.minRangeMm,s.maxRangeMm);
+  const mid={x:p0.x+Math.cos(p0.facing)*800,y:p0.y+Math.sin(p0.facing)*800};
+  results.push(["5 centerline point IN FOV", pointInPolygon(mid,poly)===true]);
+  // Case 6: point beyond max range is OUT.
+  const far={x:p0.x+Math.cos(p0.facing)*3000,y:p0.y+Math.sin(p0.facing)*3000};
+  results.push(["6 far point OUT of FOV", pointInPolygon(far,poly)===false]);
+  console.groupCollapsed("FOV tool §27 self-tests");
+  results.forEach(([n,ok])=>console.log((ok?"PASS":"FAIL")+" — "+n));
+  console.groupEnd();
+}
+
+function init(){
+  project=defaultProject(); seq={s:1,o:1,t:0};
+  bindTabs(); bindProject(); bindDoor(); bindCanvas(); bindToolbar();
+  loadAllUi(); recomputeAll();
+  window.addEventListener("resize",resizeCanvas);
+  resizeCanvas();
+  runSelfTests();
+}
+init();
+</script>
+</body>
+</html>
