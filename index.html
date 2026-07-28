@@ -149,6 +149,8 @@ a.dl{color:var(--accent)}
           <div class="field"><label>Door height (mm, report)</label><input id="d_h" type="number"></div>
           <div class="field"><label>Hinge X (fore-aft, mm)</label><input id="d_hx" type="number"></div>
         </div>
+        <div class="field"><label>Door length (fore-aft X, mm &mdash; used by top view)</label>
+          <input id="d_len" type="number"></div>
         <div class="field"><label>Door outline &mdash; corner points, door-local
           <b>Y,Z</b> per line (mm; hinge = 0,0)</label>
           <textarea id="d_profile" rows="8" spellcheck="false"
@@ -250,6 +252,13 @@ a.dl{color:var(--accent)}
   <div class="main">
     <div class="toolbar">
       <div class="grp">
+        <label>View</label>
+        <select id="viewPlane">
+          <option value="front">Front (Y–Z)</option>
+          <option value="top">Top (X–Y)</option>
+        </select>
+      </div>
+      <div class="grp">
         <label>Door position</label>
         <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
         <span id="doorPctVal" class="mini">0%</span>
@@ -327,7 +336,7 @@ function defaultProject(){
     schemaVersion:2,
     project:{ name:"New FOV Study", vehicleModel:"", customer:"",
       doorSide:"LH", preparedBy:"", testDate:new Date().toISOString().slice(0,10), notes:"" },
-    door:{ hingeX:0, hingeY:0, hingeZ:1500, heightMm:1250,
+    door:{ hingeX:0, hingeY:0, hingeZ:1500, heightMm:1250, lengthMm:1000,
       maxOpenDeg:80, baseAngleDeg:0, profile:wingDefaultProfile(),
       openTimeS:5, closeTimeS:5,
       positionsPct:[0,10,20,30,40,50,60,70,80,90,100] },
@@ -337,8 +346,13 @@ function defaultProject(){
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
-    view:{ doorPct:0, zoom:0.14, panX:70, panY:120 }
+    view:{ plane:"front", doorPct:0, zoom:0.14, panX:70, panY:120 }
   };
+}
+// Per-plane default pan/zoom so switching views frames the scene.
+function planeDefaults(plane){
+  return plane==="top" ? {zoom:0.14, panX:0, panY:-90}
+                       : {zoom:0.14, panX:70, panY:120};
 }
 // Total system response time (§12.4), ms.
 function totalResponseMs(t){ t=t||project.timing;
@@ -452,6 +466,48 @@ function sweptEnvelopePolygon(door, side){
   }
   return convexHull(all);
 }
+/* ---- View planes (front Y-Z / top X-Y) ---- */
+// Map a world {x:X,y:Y,z:Z} point to the active plane's 2D {x:horiz,y:vert}.
+function toPlane(w){
+  return project.view.plane==="top" ? {x:w.x, y:w.y} : {x:w.y, y:w.z};
+}
+// Top-view door footprint: length (X) x current outboard Y-span, as {x:X,y:Y}.
+function doorFootprintTop(door, openDeg, side){
+  const front=doorPolygonAtAngle(door, openDeg, side); // {x:Y, y:Z}
+  let ymin=Infinity, ymax=-Infinity;
+  for(const p of front){ if(p.x<ymin)ymin=p.x; if(p.x>ymax)ymax=p.x; }
+  const L=door.lengthMm||1000, x0=door.hingeX-L/2, x1=door.hingeX+L/2;
+  return [{x:x0,y:ymin},{x:x1,y:ymin},{x:x1,y:ymax},{x:x0,y:ymax}];
+}
+// Top-view nominal horizontal FOV fan (X-Y). Apex at sensor (X, current Y),
+// centered on the outboard direction, spread = hFovDeg. Layout approximation
+// (beam vertical tilt not projected). Returns {x:X, y:Y}.
+function sensorFovTop(sensor, door, openDeg, side, segs=20){
+  const pose=sensorPoseAtAngle(sensor, door, openDeg, side); // pose.x = world Y
+  const cx=door.hingeX+sensor.posX, cy=pose.x;
+  const base = side==="RH" ? Math.PI/2 : -Math.PI/2; // +Y (RH) or -Y (LH) outboard
+  const half=deg2rad(sensor.hFovDeg/2), a0=base-half, a1=base+half;
+  const outer=[], inner=[];
+  for(let i=0;i<=segs;i++){ const a=a0+(a1-a0)*i/segs;
+    outer.push({x:cx+Math.cos(a)*sensor.maxRangeMm, y:cy+Math.sin(a)*sensor.maxRangeMm}); }
+  if(sensor.minRangeMm>1){
+    for(let i=segs;i>=0;i--){ const a=a0+(a1-a0)*i/segs;
+      inner.push({x:cx+Math.cos(a)*sensor.minRangeMm, y:cy+Math.sin(a)*sensor.minRangeMm}); }
+    return outer.concat(inner);
+  }
+  return [{x:cx,y:cy}].concat(outer);
+}
+// Swept door envelope for the active plane.
+function sweptEnvelopePlane(){
+  const door=project.door, side=project.project.doorSide, top=project.view.plane==="top";
+  let all=[];
+  for(const pct of door.positionsPct){
+    const od=doorAngleForPercent(pct, door, side);
+    all=all.concat(top ? doorFootprintTop(door,od,side) : doorPolygonAtAngle(door,od,side));
+  }
+  return convexHull(all);
+}
+
 // Distance from point to segment.
 function distPointSeg(p, a, b){
   const dx=b.x-a.x, dy=b.y-a.y, l2=dx*dx+dy*dy;
@@ -567,21 +623,23 @@ function drawGrid(){
     ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
   }
   ctx.stroke();
-  // ground line at Z=0
-  ctx.strokeStyle="#3a4757"; ctx.lineWidth=1.5; ctx.beginPath();
-  const g0=worldToScreen({x:-spanY,y:0}), g1=worldToScreen({x:spanY,y:0});
-  ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
-  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
-  ctx.fillText("ground  Z=0", g1.x-90, g1.y-5);
+  const top=project.view.plane==="top";
+  if(!top){ // ground line at Z=0 (front view only)
+    ctx.strokeStyle="#3a4757"; ctx.lineWidth=1.5; ctx.beginPath();
+    const g0=worldToScreen({x:-spanY,y:0}), g1=worldToScreen({x:spanY,y:0});
+    ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
+    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+    ctx.fillText("ground  Z=0", g1.x-90, g1.y-5);
+  }
   // axes
   ctx.strokeStyle="#30363d"; ctx.lineWidth=1.5; ctx.beginPath();
-  const ay=worldToScreen({x:2500,y:0}), ay0=worldToScreen({x:-2500,y:0});
-  const az=worldToScreen({x:0,y:2500}), az0=worldToScreen({x:0,y:-200});
-  ctx.moveTo(ay0.x,ay0.y); ctx.lineTo(ay.x,ay.y);
-  ctx.moveTo(az0.x,az0.y); ctx.lineTo(az.x,az.y); ctx.stroke();
+  const ah=worldToScreen({x:2500,y:0}), ah0=worldToScreen({x:-2500,y:0});
+  const av=worldToScreen({x:0,y:2500}), av0=worldToScreen({x:0,y:-200});
+  ctx.moveTo(ah0.x,ah0.y); ctx.lineTo(ah.x,ah.y);
+  ctx.moveTo(av0.x,av0.y); ctx.lineTo(av.x,av.y); ctx.stroke();
   ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
-  ctx.fillText("+Y", ay.x-6, ay.y-6);
-  ctx.fillText("+Z up", az.x+6, az.y+4);
+  ctx.fillText(top?"+X fwd":"+Y", ah.x-6, ah.y-6);
+  ctx.fillText(top?"+Y left":"+Z up", av.x+6, av.y+4);
   ctx.beginPath(); ctx.arc(originS.x,originS.y,3,0,7); ctx.fill();
 }
 function fillPoly(poly,fill,stroke,lw){
@@ -589,27 +647,38 @@ function fillPoly(poly,fill,stroke,lw){
   if(fill){ctx.fillStyle=fill;ctx.fill();}
   if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1.5;ctx.stroke();}
 }
+// Plane-aware door outline (front polygon or top footprint).
 function drawDoor(openDeg,side,style){
-  fillPoly(doorPolygonAtAngle(project.door,openDeg,side), style.fill, style.stroke, style.lw);
+  const poly = project.view.plane==="top"
+    ? doorFootprintTop(project.door,openDeg,side)
+    : doorPolygonAtAngle(project.door,openDeg,side);
+  fillPoly(poly, style.fill, style.stroke, style.lw);
 }
 function drawHinge(){
-  const q=worldToScreen({x:project.door.hingeY,y:project.door.hingeZ});
+  const d=project.door;
+  const q=worldToScreen(toPlane({x:d.hingeX,y:d.hingeY,z:d.hingeZ}));
   ctx.fillStyle="#fff"; ctx.strokeStyle="#000";
   ctx.beginPath(); ctx.arc(q.x,q.y,5,0,7); ctx.fill(); ctx.stroke();
   ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
   ctx.fillText("hinge (roof)", q.x+8, q.y-6);
 }
-// Draw a single sensor's FOV at a given opening angle.
+// Draw a single sensor's FOV at a given opening angle (plane-aware).
 function drawSensorFov(s,openDeg,side,fill,stroke,lw){
-  const pose=sensorPoseAtAngle(s,project.door,openDeg,side);
-  fillPoly(fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm),fill,stroke,lw);
-  return pose;
+  const poly = project.view.plane==="top"
+    ? sensorFovTop(s,project.door,openDeg,side)
+    : fovPolygon(sensorPoseAtAngle(s,project.door,openDeg,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm);
+  fillPoly(poly,fill,stroke,lw);
 }
 function drawSensor(s,openDeg,side){
   if(!s.active) return;
-  const pose=drawSensorFov(s,openDeg,side,"rgba(77,163,255,.16)","rgba(77,163,255,.65)",1.2);
-  const p=worldToScreen(pose);
-  const tip=worldToScreen({x:pose.x+Math.cos(pose.facing)*400,y:pose.y+Math.sin(pose.facing)*400});
+  drawSensorFov(s,openDeg,side,"rgba(77,163,255,.16)","rgba(77,163,255,.65)",1.2);
+  const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z
+  const top=project.view.plane==="top";
+  const anchor = top ? {x:project.door.hingeX+s.posX, y:pose.x} : {x:pose.x, y:pose.y};
+  const p=worldToScreen(anchor);
+  // facing arrow: front = pose.facing (Y-Z); top = outboard direction
+  const fa = top ? (side==="RH"?Math.PI/2:-Math.PI/2) : pose.facing;
+  const tip=worldToScreen({x:anchor.x+Math.cos(fa)*400, y:anchor.y+Math.sin(fa)*400});
   ctx.strokeStyle=cssVar("--accent"); ctx.lineWidth=2; ctx.beginPath();
   ctx.moveTo(p.x,p.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
   ctx.fillStyle=cssVar("--accent");
@@ -619,7 +688,7 @@ function drawSensor(s,openDeg,side){
 }
 function drawObstacles(){
   for(const o of project.obstacles){
-    const q=worldToScreen({x:o.y,y:o.z}); // plane = (Y,Z)
+    const q=worldToScreen(toPlane({x:o.x,y:o.y,z:o.z}));
     ctx.fillStyle=cssVar("--orange");
     ctx.fillRect(q.x-5,q.y-5,10,10);
     ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
@@ -628,7 +697,7 @@ function drawObstacles(){
 }
 function drawTestPoints(){
   for(const tp of project.testPoints){
-    const q=worldToScreen({x:tp.y,y:tp.z}); // plane = (Y,Z)
+    const q=worldToScreen(toPlane({x:tp.x,y:tp.y,z:tp.z}));
     const col = tp.result==="PASS"?cssVar("--green")
       : tp.result==="FAIL"?cssVar("--red")
       : tp.result==="CONDITIONAL PASS"?cssVar("--yellow")
@@ -645,7 +714,7 @@ function render(){
   const openDeg=doorAngleForPercent(project.view.doorPct,project.door,side);
   drawGrid();
   if($("showSwept").checked){
-    fillPoly(sweptEnvelopePolygon(project.door,side),
+    fillPoly(sweptEnvelopePlane(),
       "rgba(163,113,247,.10)","rgba(163,113,247,.5)",1);
   }
   // Swept-FOV "feathers": door + FOV at every position (faded).
@@ -707,7 +776,7 @@ function loadProjectFields(){
 }
 // ---- Door fields ----
 function bindDoor(){
-  const map={d_hx:"hingeX",d_hy:"hingeY",d_hz:"hingeZ",
+  const map={d_hx:"hingeX",d_hy:"hingeY",d_hz:"hingeZ",d_len:"lengthMm",
     d_h:"heightMm",d_max:"maxOpenDeg",d_base:"baseAngleDeg"};
   for(const id in map){
     $(id).addEventListener("input",()=>{ project.door[map[id]]=parseFloat($(id).value)||0;
@@ -718,6 +787,7 @@ function loadDoorFields(){
   const d=project.door;
   $("d_hx").value=d.hingeX; $("d_hy").value=d.hingeY; $("d_hz").value=d.hingeZ;
   $("d_h").value=d.heightMm; $("d_max").value=d.maxOpenDeg; $("d_base").value=d.baseAngleDeg;
+  $("d_len").value=d.lengthMm;
   $("d_profile").value=(d.profile||[]).map(p=>p.y+","+p.z).join("\n");
 }
 function applyProfile(){
@@ -1016,7 +1086,7 @@ function openReport(){
       <tr><td>Positions</td><td>${d.positionsPct.join(", ")} %</td></tr></table>
     <h2>3. Sensor Specification</h2>
     <table><tr><th>ID</th><th>Name</th><th>Type</th><th>FOV (H/V)</th><th>Range</th><th>Pos (X,Y,Z)</th></tr>${sensorRows}</table>
-    <h2>4. Static FOV Visualization (front view, Y–Z)</h2>
+    <h2>4. Static FOV Visualization (${project.view.plane==="top"?"top view, X–Y":"front view, Y–Z"})</h2>
     <p>Door at ${project.view.doorPct}% opening (${doorAngleForPercent(project.view.doorPct,d,p.doorSide).toFixed(1)}°).</p><img src="${png}">
     <h2>5. Summary</h2>
     <table class="kv">
@@ -1044,6 +1114,7 @@ function loadAllUi(){
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
   renderTpTable();
   $("doorPct").value=project.view.doorPct;
+  $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
 }
 function updateDoorPctLabel(){
@@ -1074,8 +1145,15 @@ function newProject(){
   if(!confirm("Start a new project? Unsaved data will be lost.")) return;
   project=defaultProject(); seq={s:1,o:1,t:0}; loadAllUi(); recomputeAll(); render();
 }
-function resetView(){ const v=defaultProject().view;
+function resetView(){ const v=planeDefaults(project.view.plane);
   project.view.zoom=v.zoom; project.view.panX=v.panX; project.view.panY=v.panY; render(); }
+function setViewPlane(plane){
+  pauseAnim();
+  project.view.plane=plane;
+  const v=planeDefaults(plane);
+  project.view.zoom=v.zoom; project.view.panX=v.panX; project.view.panY=v.panY;
+  render();
+}
 
 function bindCanvas(){
   cv.addEventListener("wheel",e=>{ e.preventDefault();
@@ -1086,8 +1164,11 @@ function bindCanvas(){
   cv.addEventListener("mousedown",e=>{
     if($("clickAdd").checked){
       const r=cv.getBoundingClientRect();
-      const w=screenToWorld(e.clientX-r.left,e.clientY-r.top); // w.x=Y, w.y=Z
-      addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
+      const w=screenToWorld(e.clientX-r.left,e.clientY-r.top); // w.x=horiz, w.y=vert
+      if(project.view.plane==="top") // horiz=X, vert=Y; Z from field
+        addTestPoint(Math.round(w.x), Math.round(w.y), parseFloat($("tp_z").value)||0, $("tp_obs").value);
+      else // horiz=Y, vert=Z; X from field
+        addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
       return;
     }
     drag={x:e.clientX,y:e.clientY,px:project.view.panX,py:project.view.panY};
@@ -1106,6 +1187,7 @@ function bindToolbar(){
   });
   ["showSwept","showGhost"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("dynOverlay").addEventListener("change",render);
+  $("viewPlane").addEventListener("change",()=>setViewPlane($("viewPlane").value));
 }
 
 /* ---- Animation (Phase 2). setInterval @50 Hz for reliable playback. ---- */
@@ -1223,6 +1305,14 @@ function runSelfTests(){
   const dr=analyzeObstacle(project.obstacles[0]);
   results.push(["dyn analysis returns verdict",
     typeof dr.cls==="string" && dr.profile.length>0 && isFinite(dr.minClear)]);
+  // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
+  const fp=doorFootprintTop(project.door,0,"LH");
+  const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
+  const front0=doorPolygonAtAngle(project.door,0,"LH").map(p=>p.x);
+  results.push(["top footprint X-width == lengthMm",
+    approx(Math.max(...fx)-Math.min(...fx), project.door.lengthMm)]);
+  results.push(["top footprint Y-span == profile Y-span",
+    approx(Math.max(...fy)-Math.min(...fy), Math.max(...front0)-Math.min(...front0))]);
   console.groupCollapsed("FOV tool §27 self-tests");
   results.forEach(([n,ok])=>console.log((ok?"PASS":"FAIL")+" — "+n));
   console.groupEnd();
