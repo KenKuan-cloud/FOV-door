@@ -113,6 +113,7 @@ a.dl{color:var(--accent)}
       <button data-tab="sensor">Sensors</button>
       <button data-tab="obstacle">Obstacles</button>
       <button data-tab="test">Test Points</button>
+      <button data-tab="data">Data</button>
       <button data-tab="dynamic">Dynamic</button>
       <button data-tab="dash">Dashboard</button>
     </div>
@@ -208,6 +209,47 @@ a.dl{color:var(--accent)}
           in the table below.</p>
       </div>
 
+      <!-- Data import / repeatability (Phase 3) -->
+      <div class="panel" data-tab="data">
+        <h2>Test Data Import (§16, §19)</h2>
+        <p class="hint">Import a CSV of bench/vehicle results or a sensor log.
+          Map the columns, then import &mdash; rows sharing a point key are grouped
+          into repetitions and a detection rate is computed per point.</p>
+        <div class="field"><label>CSV file</label><input id="csvFile" type="file" accept=".csv,text/csv"></div>
+        <div id="csvMap" style="display:none">
+          <p class="mini" style="color:var(--accent)">Map columns &rarr; fields</p>
+          <div class="row">
+            <div class="field"><label>Point ID (group key)</label><select id="m_id"></select></div>
+            <div class="field"><label>Door %</label><select id="m_pct"></select></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>X (fore-aft)</label><select id="m_x"></select></div>
+            <div class="field"><label>Y (horiz)</label><select id="m_y"></select></div>
+            <div class="field"><label>Z (height)</label><select id="m_z"></select></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Detected / Result</label><select id="m_det"></select></div>
+            <div class="field"><label>Obstacle type</label><select id="m_obs"></select></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Measured dist</label><select id="m_meas"></select></div>
+            <div class="field"><label>Actual dist</label><select id="m_act"></select></div>
+            <div class="field"><label>Delay (ms)</label><select id="m_delay"></select></div>
+          </div>
+          <label class="mini"><input type="checkbox" id="m_replace"> Replace existing test points</label>
+          <div style="margin-top:8px">
+            <button class="primary" onclick="importCsvMapped()">Import mapped rows</button>
+            <span id="csvInfo" class="mini"></span>
+          </div>
+        </div>
+        <p class="mini" style="color:var(--accent);margin-top:14px">Detection-rate thresholds (§16)</p>
+        <div class="row">
+          <div class="field"><label>PASS ≥ (%)</label><input id="ev_pass" type="number"></div>
+          <div class="field"><label>CONDITIONAL ≥ (%)</label><input id="ev_cond" type="number"></div>
+        </div>
+        <div id="repSummary" style="margin-top:12px"></div>
+      </div>
+
       <!-- Dynamic door analysis (Phase 2) -->
       <div class="panel" data-tab="dynamic">
         <h2>Dynamic Door Analysis</h2>
@@ -281,6 +323,7 @@ a.dl{color:var(--accent)}
       <div class="grp">
         <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
         <label><input type="checkbox" id="showGhost" checked> Swept FOV (feathers)</label>
+        <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
         <label><input type="checkbox" id="clickAdd"> Add point on click</label>
       </div>
       <div class="grp">
@@ -310,7 +353,7 @@ a.dl{color:var(--accent)}
         <thead><tr>
           <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
           <th>X</th><th>Y</th><th>Z</th><th>In FOV</th><th>Blind</th>
-          <th>Result</th><th>Comments</th><th></th>
+          <th>Reps</th><th>Det.rate</th><th>Result</th><th>Comments</th><th></th>
         </tr></thead>
         <tbody id="tpBody"></tbody>
       </table>
@@ -358,6 +401,8 @@ function defaultProject(){
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
+    // Repeatability detection-rate thresholds (§16), percent.
+    eval:{ passRatePct:95, condRatePct:90 },
     view:{ plane:"front", doorPct:0 },
     viewFront: planeDefaults("front"), // {zoom,panX,panY}
     viewTop: planeDefaults("top")
@@ -779,6 +824,11 @@ function drawScene(){
         drawSensorFov(s,od,side,"rgba(77,163,255,.05)","rgba(77,163,255,.18)",1); });
     }
   }
+  // Measured FOV boundary from PASS points (§9.2), front plane only.
+  if(curPlane==="front" && $("showMeasured").checked){
+    const hull=measuredFovHull();
+    if(hull) fillPoly(hull,"rgba(57,211,83,.10)","rgba(57,211,83,.7)",1.5);
+  }
   drawDoor(openDeg,side,{fill:"rgba(230,237,243,.12)",stroke:"#e6edf3",lw:2});
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
@@ -810,6 +860,7 @@ function bindTabs(){
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
     if(b.dataset.tab==="dash") renderDashboard();
     if(b.dataset.tab==="dynamic") runDynamic();
+    if(b.dataset.tab==="data") renderRepSummary();
   });
 }
 // ---- Project fields ----
@@ -976,7 +1027,32 @@ function clearTestPoints(){
   if(project.testPoints.length && !confirm("Clear all test points?")) return;
   project.testPoints=[]; renderTpTable(); render();
 }
+// Repeatability statistics (§16) from a test point's measured repetitions.
+// reps: [{detected, measuredMm, actualMm, delayMs, false}]. Returns null if none.
+function tpStats(tp){
+  const r=tp.reps; if(!r||!r.length) return null;
+  const n=r.length, det=r.filter(x=>x.detected).length;
+  const fp=r.filter(x=>x.false).length;
+  const dists=r.filter(x=>x.detected && isFinite(x.measuredMm)).map(x=>x.measuredMm);
+  const delays=r.filter(x=>isFinite(x.delayMs)).map(x=>x.delayMs);
+  const mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:null;
+  const md=mean(dists);
+  const std=dists.length? Math.sqrt(mean(dists.map(v=>(v-md)*(v-md)))):null;
+  const rate=n?det/n*100:0;
+  return { n, det, rate, missRate:100-rate, falseRate:n?fp/n*100:0,
+    meanMm:md, minMm:dists.length?Math.min(...dists):null, maxMm:dists.length?Math.max(...dists):null,
+    stdMm:std, meanDelay:mean(delays), maxDelay:delays.length?Math.max(...delays):null };
+}
+// Detection-rate classification (§16), configurable thresholds.
+function rateResult(rate){
+  const e=project.eval||{passRatePct:95,condRatePct:90};
+  if(rate>=e.passRatePct) return "PASS";
+  if(rate>=e.condRatePct) return "CONDITIONAL PASS";
+  return "FAIL";
+}
 // Auto in-FOV + blind evaluation (criteria 9 & 12). Plane = (Y,Z).
+// When measured repetitions exist, the result comes from the detection rate (§16);
+// otherwise from the geometric in-FOV check.
 function evaluateTestPoint(tp){
   const pt={x:tp.y, y:tp.z};
   const sid=isInAnyFov(pt, tp.doorPct);
@@ -984,18 +1060,118 @@ function evaluateTestPoint(tp){
   const inSwept=pointInPolygon(pt,
     sweptEnvelopePolygon(project.door,project.project.doorSide));
   tp.blind = inSwept && !tp.inFov;
-  if(tp.result!=="CONDITIONAL PASS" && !tp._manual){
-    tp.result = tp.inFov ? "PASS" : "FAIL";
-  }
+  if(tp._manual) return;
+  const st=tpStats(tp);
+  if(st) tp.result = rateResult(st.rate);            // measured data wins
+  else if(tp.result!=="CONDITIONAL PASS") tp.result = tp.inFov ? "PASS" : "FAIL";
+}
+// Convex-hull "measured FOV" boundary from PASS test points, front plane (Y,Z).
+function measuredFovHull(){
+  const pts=project.testPoints.filter(t=>t.result==="PASS").map(t=>({x:t.y,y:t.z}));
+  return pts.length>=3 ? convexHull(pts) : null;
 }
 function recomputeAll(){ project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
+
+/* ---- Phase 3: CSV data import (§19) + repeatability (§16) ---- */
+// Minimal CSV parser (handles quoted fields and commas within quotes).
+function parseCSV(text){
+  const rows=[]; let i=0, field="", row=[], q=false;
+  const pushF=()=>{row.push(field);field="";}, pushR=()=>{pushF();rows.push(row);row=[];};
+  while(i<text.length){
+    const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; } else field+=c; }
+    else if(c==='"') q=true;
+    else if(c===',') pushF();
+    else if(c==='\r'){}
+    else if(c==='\n') pushR();
+    else field+=c;
+    i++;
+  }
+  if(field.length||row.length) pushR();
+  const headers=(rows.shift()||[]).map(h=>h.trim());
+  return { headers, rows:rows.filter(r=>r.some(v=>v!=="")) };
+}
+let pendingCsv=null; // {headers, rows}
+function onCsvFile(file){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    pendingCsv=parseCSV(rd.result);
+    const opts='<option value="">(none)</option>'+
+      pendingCsv.headers.map((h,i)=>`<option value="${i}">${h||("col"+i)}</option>`).join("");
+    ["m_id","m_pct","m_x","m_y","m_z","m_det","m_obs","m_meas","m_act","m_delay"]
+      .forEach(id=>{ $(id).innerHTML=opts; });
+    // Best-guess auto-map by header name.
+    const find=(re)=>{ const i=pendingCsv.headers.findIndex(h=>re.test(h)); return i<0?"":String(i); };
+    $("m_id").value=find(/point.?id|test.?point|^id$/i);
+    $("m_pct").value=find(/door.*(pos|%|percent)/i);
+    $("m_x").value=find(/(^|_)x(_mm)?$|obstacle_x/i);
+    $("m_y").value=find(/(^|_)y(_mm)?$|obstacle_y/i);
+    $("m_z").value=find(/(^|_)z(_mm)?$|obstacle_z/i);
+    $("m_det").value=find(/result|detect|status|pass/i);
+    $("m_obs").value=find(/obstacle.*type|^type$/i);
+    $("m_meas").value=find(/measured.*dist/i);
+    $("m_act").value=find(/actual.*dist/i);
+    $("m_delay").value=find(/delay|latency|time.?ms/i);
+    $("csvMap").style.display="block";
+    $("csvInfo").textContent=pendingCsv.rows.length+" rows, "+pendingCsv.headers.length+" columns";
+  };
+  rd.readAsText(file);
+}
+const isDetected=v=>/^(1|y|yes|true|pass|detect|detected|ok)/i.test(String(v).trim());
+function importCsvMapped(){
+  if(!pendingCsv){ alert("Choose a CSV file first."); return; }
+  const gi=id=>{ const v=$(id).value; return v===""?-1:parseInt(v,10); };
+  const cId=gi("m_id"),cPct=gi("m_pct"),cX=gi("m_x"),cY=gi("m_y"),cZ=gi("m_z"),
+    cDet=gi("m_det"),cObs=gi("m_obs"),cMeas=gi("m_meas"),cAct=gi("m_act"),cDelay=gi("m_delay");
+  const num=(r,c,d)=>{ if(c<0)return d; const v=parseFloat(r[c]); return isNaN(v)?d:v; };
+  if($("m_replace").checked) project.testPoints=[];
+  const byId={}; project.testPoints.forEach(t=>byId[t.id]=t);
+  let added=0, reps=0;
+  for(const r of pendingCsv.rows){
+    const x=num(r,cX,0), y=num(r,cY,0), z=num(r,cZ,0), pct=num(r,cPct,0);
+    const key = cId>=0 && r[cId] ? r[cId].trim()
+      : `IMP-D${Math.round(pct)}-X${Math.round(x)}-Y${Math.round(y)}-Z${Math.round(z)}`;
+    let tp=byId[key];
+    if(!tp){ tp={ id:key, x,y,z, doorPct:pct,
+        obstacleId: cObs>=0? (r[cObs]||"").trim() : (project.obstacles[0]&&project.obstacles[0].id)||"",
+        sensorId:null, inFov:false, blind:false, result:"", comments:"", reps:[] };
+      project.testPoints.push(tp); byId[key]=tp; added++;
+    }
+    if(!tp.reps) tp.reps=[];
+    const detected = cDet>=0 ? isDetected(r[cDet]) : true;
+    tp.reps.push({ detected, measuredMm:num(r,cMeas,NaN), actualMm:num(r,cAct,NaN),
+      delayMs:num(r,cDelay,NaN), false:false });
+    reps++;
+  }
+  seq.t=Math.max(seq.t, project.testPoints.length);
+  recomputeAll(); renderRepSummary(); render();
+  $("csvInfo").textContent=`Imported ${reps} rows → ${added} new point(s), ${project.testPoints.length} total.`;
+}
+// Repeatability summary (§16) across all points with measured data.
+function renderRepSummary(){
+  const el=$("repSummary"); if(!el) return;
+  const withReps=project.testPoints.filter(t=>t.reps&&t.reps.length);
+  if(!withReps.length){ el.innerHTML='<p class="mini">No measured repetitions imported yet.</p>'; return; }
+  let totalReps=0, totalDet=0;
+  const rows=withReps.map(t=>{ const s=tpStats(t); totalReps+=s.n; totalDet+=s.det;
+    const rb=t.result==="PASS"?"b-pass":t.result==="FAIL"?"b-fail":t.result==="CONDITIONAL PASS"?"b-cond":"b-nt";
+    return `<tr><td>${t.id}</td><td>${s.n}</td><td>${s.rate.toFixed(0)}%</td>
+      <td>${s.meanMm!=null?Math.round(s.meanMm):"—"}</td>
+      <td>${s.stdMm!=null?Math.round(s.stdMm):"—"}</td>
+      <td>${s.maxDelay!=null?Math.round(s.maxDelay):"—"}</td>
+      <td><span class="badge ${rb}">${t.result||"—"}</span></td></tr>`; }).join("");
+  const overall= totalReps? (totalDet/totalReps*100).toFixed(1):0;
+  el.innerHTML=`<p class="mini">${withReps.length} point(s), ${totalReps} repetitions, overall detection ${overall}%.</p>
+    <table><tr><th>Point</th><th>N</th><th>Rate</th><th>Mean mm</th><th>Std</th><th>Max delay</th><th>Result</th></tr>${rows}</table>`;
+}
 
 function renderTpTable(){
   const body=$("tpBody"); body.innerHTML="";
   project.testPoints.forEach(tp=>{
     const tr=document.createElement("tr");
     if(tp.blind) tr.className="blind";
+    const st=tpStats(tp);
     const rb = tp.result==="PASS"?"b-pass":tp.result==="FAIL"?"b-fail":
       tp.result==="CONDITIONAL PASS"?"b-cond":"b-nt";
     tr.innerHTML=`
@@ -1004,6 +1180,8 @@ function renderTpTable(){
       <td>${Math.round(tp.x)}</td><td>${Math.round(tp.y)}</td><td>${Math.round(tp.z)}</td>
       <td>${tp.inFov?"YES":"no"}</td>
       <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
+      <td>${st?st.n:"—"}</td>
+      <td>${st?st.rate.toFixed(0)+"%":"—"}</td>
       <td><select data-k="result">
         ${["","PASS","CONDITIONAL PASS","FAIL"].map(r=>`<option ${r===tp.result?"selected":""}>${r||"—"}</option>`).join("")}
       </select></td>
@@ -1027,12 +1205,18 @@ function renderDashboard(){
   const cond=tps.filter(t=>t.result==="CONDITIONAL PASS").length;
   const blind=tps.filter(t=>t.blind).length;
   const cov= total? Math.round(pass/total*100):0;
+  // Measured-data (repeatability) rollup (§16).
+  const withReps=tps.filter(t=>t.reps&&t.reps.length);
+  let nReps=0, nDet=0; withReps.forEach(t=>{const s=tpStats(t); nReps+=s.n; nDet+=s.det;});
+  const measRate = nReps? Math.round(nDet/nReps*100):0;
   const g=(n,l,cls)=>`<div class="stat"><div class="n ${cls||''}">${n}</div><div class="l">${l}</div></div>`;
   $("dashGrid").innerHTML=
     g(total,"Total points")+g(tested,"Tested")+
     g(pass,"Passed","")+g(fail,"Failed",fail?"danger":"")+
     g(cond,"Conditional")+g(blind,"Blind points",blind?"danger":"")+
-    g(cov+"%","Detection coverage")+g(project.sensors.filter(s=>s.active).length,"Active sensors");
+    g(cov+"%","Detection coverage")+g(project.sensors.filter(s=>s.active).length,"Active sensors")+
+    g(withReps.length,"Measured points")+g(nReps,"Total repetitions")+
+    g(measRate+"%","Measured det. rate",measRate&&measRate<project.eval.condRatePct?"danger":"");
 }
 
 /* ====================== 6. IMPORT / EXPORT ====================== */
@@ -1055,6 +1239,7 @@ function importJson(){
         project.project = Object.assign(defaultProject().project, data.project||{});
         project.door = Object.assign(defaultProject().door, data.door||{});
         project.timing = Object.assign(defaultProject().timing, data.timing||{});
+        project.eval = Object.assign(defaultProject().eval, data.eval||{});
         project.view = Object.assign(defaultProject().view, data.view||{});
         if(project.view.plane!=="front"&&project.view.plane!=="top"&&project.view.plane!=="split")
           project.view.plane="front";
@@ -1079,14 +1264,17 @@ function importJson(){
 }
 function exportCsv(){
   const cols=["Test_Point_ID","Sensor_ID","Door_Position_Percent","Obstacle_Type",
-    "Obstacle_X_mm","Obstacle_Y_mm","Obstacle_Z_mm","In_FOV","Blind_Zone","Result","Comments"];
+    "Obstacle_X_mm","Obstacle_Y_mm","Obstacle_Z_mm","In_FOV","Blind_Zone",
+    "N_Reps","Detection_Rate_pct","Mean_Distance_mm","Result","Comments"];
   const rows=[cols.join(",")];
   for(const tp of project.testPoints){
     const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
+    const st=tpStats(tp);
     const line=[tp.id, tp.sensorId||"", tp.doorPct, obs?obs.type:"",
       Math.round(tp.x), Math.round(tp.y), Math.round(tp.z),
-      tp.inFov?"YES":"NO", tp.blind?"YES":"NO", tp.result,
-      '"'+(tp.comments||"").replace(/"/g,'""')+'"'];
+      tp.inFov?"YES":"NO", tp.blind?"YES":"NO",
+      st?st.n:"", st?st.rate.toFixed(1):"", st&&st.meanMm!=null?Math.round(st.meanMm):"",
+      tp.result, '"'+(tp.comments||"").replace(/"/g,'""')+'"'];
     rows.push(line.join(","));
   }
   download((project.project.name||"testmatrix").replace(/\s+/g,"_")+"_testmatrix.csv",
@@ -1118,6 +1306,15 @@ function openReport(){
     <td>${Math.round(r.sysMs)} ms</td>
     <td>${r.marginMs!=null?Math.round(r.marginMs)+" ms":"—"}</td>
     <td><b>${r.cls}</b></td></tr>`).join("");
+  const measured=tps.filter(t=>t.reps&&t.reps.length);
+  const repRows=measured.map(t=>{ const s=tpStats(t);
+    return `<tr><td>${t.id}</td><td>${s.n}</td><td>${s.rate.toFixed(1)}%</td>
+      <td>${s.meanMm!=null?Math.round(s.meanMm):"—"}</td>
+      <td>${s.minMm!=null?Math.round(s.minMm):"—"}</td>
+      <td>${s.maxMm!=null?Math.round(s.maxMm):"—"}</td>
+      <td>${s.stdMm!=null?Math.round(s.stdMm):"—"}</td>
+      <td>${s.maxDelay!=null?Math.round(s.maxDelay):"—"}</td>
+      <td><b>${t.result||"—"}</b></td></tr>`; }).join("");
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8">
     <title>FOV Report — ${p.name}</title><style>
     body{font:13px/1.5 Arial;margin:32px;color:#111}
@@ -1163,7 +1360,12 @@ function openReport(){
       mech ${project.timing.mechMs}); target margin ${project.timing.targetMarginMs} ms.</p>
     <table><tr><th>Obstacle</th><th>Detect %</th><th>Contact %</th><th>Min clearance</th>
       <th>Reaction</th><th>System</th><th>Margin</th><th>Verdict</th></tr>${dynRows}</table>
-    <h2>7. Test Point Details</h2>
+    ${measured.length?`<h2>7. Repeatability &amp; Detection Rate (§16)</h2>
+    <p>Thresholds: PASS ≥ ${project.eval.passRatePct}%, CONDITIONAL ≥ ${project.eval.condRatePct}%.
+      ${measured.length} measured point(s).</p>
+    <table><tr><th>Point</th><th>N</th><th>Det. rate</th><th>Mean mm</th><th>Min</th><th>Max</th>
+      <th>Std</th><th>Max delay ms</th><th>Result</th></tr>${repRows}</table>`:""}
+    <h2>${measured.length?8:7}. Test Point Details</h2>
     <table><tr><th>ID</th><th>Door%</th><th>Sensor</th><th>Pos (X,Y,Z)</th><th>In FOV</th><th>Blind</th><th>Result</th></tr>${tpRows}</table>
     <p style="margin-top:30px;color:#888;font-size:11px">Generated by Wing Door Sensor FOV Tool · ${new Date().toLocaleString()}</p>
     </body></html>`;
@@ -1172,12 +1374,23 @@ function openReport(){
 
 /* ====================== 7. INIT / EVENTS ====================== */
 function loadAllUi(){
-  loadProjectFields(); loadDoorFields(); loadDynamicFields();
+  loadProjectFields(); loadDoorFields(); loadDynamicFields(); loadDataFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
-  renderTpTable();
+  renderTpTable(); renderRepSummary();
   $("doorPct").value=project.view.doorPct;
   $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
+}
+function loadDataFields(){
+  const e=project.eval||{passRatePct:95,condRatePct:90};
+  $("ev_pass").value=e.passRatePct; $("ev_cond").value=e.condRatePct;
+}
+function bindData(){
+  $("csvFile").addEventListener("change",e=>{ if(e.target.files[0]) onCsvFile(e.target.files[0]); });
+  $("ev_pass").addEventListener("input",()=>{ project.eval.passRatePct=parseFloat($("ev_pass").value)||0;
+    recomputeAll(); renderRepSummary(); render(); });
+  $("ev_cond").addEventListener("input",()=>{ project.eval.condRatePct=parseFloat($("ev_cond").value)||0;
+    recomputeAll(); renderRepSummary(); render(); });
 }
 function updateDoorPctLabel(){
   const pct=project.view.doorPct;
@@ -1259,7 +1472,7 @@ function bindToolbar(){
     project.view.doorPct=parseFloat($("doorPct").value);
     updateDoorPctLabel(); recomputeAll(); render();
   });
-  ["showSwept","showGhost"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
+  ["showSwept","showGhost","showMeasured"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("dynOverlay").addEventListener("change",render);
   $("viewPlane").addEventListener("change",()=>setViewPlane($("viewPlane").value));
 }
@@ -1379,6 +1592,14 @@ function runSelfTests(){
   const dr=analyzeObstacle(project.obstacles[0]);
   results.push(["dyn analysis returns verdict",
     typeof dr.cls==="string" && dr.profile.length>0 && isFinite(dr.minClear)]);
+  // Phase 3: repeatability stats + rate classification.
+  const tpr={reps:[{detected:true,measuredMm:100},{detected:true,measuredMm:120},
+    {detected:false,measuredMm:NaN},{detected:true,measuredMm:110}]};
+  const st=tpStats(tpr);
+  results.push(["rep stats rate 75%, mean 110",
+    st && Math.round(st.rate)===75 && Math.round(st.meanMm)===110]);
+  results.push(["rate classification thresholds",
+    rateResult(96)==="PASS" && rateResult(92)==="CONDITIONAL PASS" && rateResult(80)==="FAIL"]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
@@ -1394,7 +1615,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
