@@ -109,6 +109,7 @@ a.dl{color:var(--accent)}
       <button data-tab="sensor">Sensors</button>
       <button data-tab="obstacle">Obstacles</button>
       <button data-tab="test">Test Points</button>
+      <button data-tab="dynamic">Dynamic</button>
       <button data-tab="dash">Dashboard</button>
     </div>
     <div class="panels">
@@ -201,6 +202,41 @@ a.dl{color:var(--accent)}
           in the table below.</p>
       </div>
 
+      <!-- Dynamic door analysis (Phase 2) -->
+      <div class="panel" data-tab="dynamic">
+        <h2>Dynamic Door Analysis</h2>
+        <p class="hint">Sweeps the opening door and, for each obstacle, finds when
+          it first enters the sensor FOV vs. when the moving door would contact it
+          &mdash; then the available reaction time, system response time, and safety
+          margin (§12, §34).</p>
+        <div class="row">
+          <div class="field"><label>Door open time (s)</label><input id="d_open" type="number" step="0.1"></div>
+          <div class="field"><label>Door close time (s)</label><input id="d_close" type="number" step="0.1"></div>
+        </div>
+        <p class="mini" style="margin:4px 0;color:var(--accent)">System response chain (ms)</p>
+        <div class="row">
+          <div class="field"><label>Sensor</label><input id="t_sensor" type="number"></div>
+          <div class="field"><label>Comms</label><input id="t_comm" type="number"></div>
+          <div class="field"><label>ECU</label><input id="t_ecu" type="number"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Motor</label><input id="t_motor" type="number"></div>
+          <div class="field"><label>Mech. stop</label><input id="t_mech" type="number"></div>
+          <div class="field"><label>Total</label><input id="t_total" type="number" disabled></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Target margin (ms)</label><input id="t_target" type="number"></div>
+          <div class="field"><label>Min clearance (mm)</label><input id="t_clear" type="number"></div>
+          <div class="field"><label>Sweep step (%)</label><input id="t_step" type="number" step="0.1"></div>
+        </div>
+        <button class="primary" onclick="runDynamic()">Run dynamic analysis</button>
+        <label class="mini" style="margin-left:8px"><input type="checkbox" id="dynOverlay" checked> Show detect/contact on view</label>
+        <div id="dynResults" style="margin-top:12px"></div>
+        <canvas id="dynChart" width="300" height="150"
+          style="width:100%;height:150px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-top:8px"></canvas>
+        <p class="mini" id="dynChartCap" style="text-align:center"></p>
+      </div>
+
       <!-- Dashboard -->
       <div class="panel" data-tab="dash">
         <h2>Dashboard</h2>
@@ -215,9 +251,18 @@ a.dl{color:var(--accent)}
     <div class="toolbar">
       <div class="grp">
         <label>Door position</label>
-        <input type="range" id="doorPct" min="0" max="100" step="10" value="0">
+        <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
         <span id="doorPctVal" class="mini">0%</span>
         <span id="doorAngVal" class="mini"></span>
+        <span id="doorTimeVal" class="mini"></span>
+      </div>
+      <div class="grp">
+        <button onclick="animStep(-5)" title="Step back">⏮</button>
+        <button onclick="playAnim(-1)" title="Play closing">◀</button>
+        <button onclick="pauseAnim()" title="Pause">⏸</button>
+        <button onclick="playAnim(1)" title="Play opening">▶</button>
+        <button onclick="animStep(5)" title="Step forward">⏭</button>
+        <label>speed <input type="range" id="animSpeed" min="0.25" max="4" step="0.25" value="1" style="width:70px"></label>
       </div>
       <div class="grp">
         <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
@@ -284,13 +329,20 @@ function defaultProject(){
       doorSide:"LH", preparedBy:"", testDate:new Date().toISOString().slice(0,10), notes:"" },
     door:{ hingeX:0, hingeY:0, hingeZ:1500, heightMm:1250,
       maxOpenDeg:80, baseAngleDeg:0, profile:wingDefaultProfile(),
+      openTimeS:5, closeTimeS:5,
       positionsPct:[0,10,20,30,40,50,60,70,80,90,100] },
     sensors:[ demoSensor() ],
-    obstacles:[ { id:"O1", type:"Garage wall", x:0, y:-1700, z:1000, width:100, height:2400 } ],
+    obstacles:[ { id:"O1", type:"Narrow metal pole", x:0, y:-1600, z:1200, width:60, height:1400 } ],
     testPoints:[],
+    // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
+    timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
+      targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
     view:{ doorPct:0, zoom:0.14, panX:70, panY:120 }
   };
 }
+// Total system response time (§12.4), ms.
+function totalResponseMs(t){ t=t||project.timing;
+  return (t.sensorMs||0)+(t.commMs||0)+(t.ecuMs||0)+(t.motorMs||0)+(t.mechMs||0); }
 function demoSensor(){
   // Door-local: near the lower outer (leading) edge, facing outboard-and-down.
   return { id:"S1", name:"Lower outer edge", type:"Ultrasonic",
@@ -400,6 +452,73 @@ function sweptEnvelopePolygon(door, side){
   }
   return convexHull(all);
 }
+// Distance from point to segment.
+function distPointSeg(p, a, b){
+  const dx=b.x-a.x, dy=b.y-a.y, l2=dx*dx+dy*dy;
+  let t = l2>0 ? ((p.x-a.x)*dx+(p.y-a.y)*dy)/l2 : 0;
+  t=Math.max(0,Math.min(1,t));
+  const cx=a.x+t*dx, cy=a.y+t*dy;
+  return Math.hypot(p.x-cx, p.y-cy);
+}
+// Distance from point to polygon boundary; 0 if inside.
+function distPointPolygon(p, poly){
+  if(pointInPolygon(p, poly)) return 0;
+  let d=Infinity;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    d=Math.min(d, distPointSeg(p, poly[j], poly[i]));
+  }
+  return d;
+}
+// Effective obstacle radius in the Y-Z plane = half its horizontal extent
+// (width or diameter). Height is the vertical extent and does not change the
+// horizontal door-edge clearance in this front-view slice.
+function obstacleRadius(o){ return (o.diameter? o.diameter : (o.width||0))/2; }
+
+/* ---- Dynamic motion analysis (§11.2, §12) ----
+   Sweep the door from 0->100% (opening) in fine steps and, for one obstacle,
+   find: first door position where it enters any sensor FOV (detection), and
+   first position where the moving door would contact it (door boundary within
+   obstacleRadius + minClearance). Convert positions to time via openTimeS and
+   compute the available reaction time, system response time, and safety margin. */
+function analyzeObstacle(o){
+  const door=project.door, side=project.project.doorSide;
+  const step=Math.max(0.1, project.timing.gridStepPct||0.5);
+  const pt={x:o.y, y:o.z};
+  const rad=obstacleRadius(o), clr=project.timing.minClearanceMm||0;
+  const tPerPct=(door.openTimeS||0)*1000/100; // ms per % of travel
+  let detectPct=null, contactPct=null, minClear=Infinity, minClearPct=0, everInFov=false;
+  const profile=[]; // {pct, clearance, inFov}
+  for(let pct=0; pct<=100+1e-6; pct+=step){
+    const od=doorAngleForPercent(pct, door, side);
+    const inFov = !!isInAnyFov(pt, pct);
+    const dPoly = distPointPolygon(pt, doorPolygonAtAngle(door, od, side));
+    const clearance = dPoly - rad; // gap between door edge and obstacle surface
+    if(inFov){ everInFov=true; if(detectPct===null) detectPct=pct; }
+    if(contactPct===null && clearance<=clr) contactPct=pct;
+    if(clearance<minClear){ minClear=clearance; minClearPct=pct; }
+    profile.push({pct, clearance, inFov});
+  }
+  const contacts = contactPct!==null;
+  const detectTimeMs = detectPct!==null ? detectPct*tPerPct : null;
+  const contactTimeMs = contacts ? contactPct*tPerPct : null;
+  // Reaction time available = time between confirmed detection and contact.
+  let reactionMs=null;
+  if(contacts && detectPct!==null && detectPct<=contactPct)
+    reactionMs = (contactPct-detectPct)*tPerPct;
+  const sysMs = totalResponseMs();
+  const marginMs = reactionMs!=null ? reactionMs - sysMs : null;
+  // Classification (§12.5, §23).
+  let cls;
+  if(!contacts) cls="NO CONTACT";
+  else if(detectPct===null || detectPct>contactPct) cls="NOT DETECTED";
+  else if(marginMs<=0) cls="FAIL";
+  else if(marginMs<(project.timing.targetMarginMs||0)) cls="MARGINAL";
+  else cls="PASS";
+  return { id:o.id, everInFov, detectPct, contactPct, contacts,
+    detectTimeMs, contactTimeMs, reactionMs, sysMs, marginMs,
+    minClear, minClearPct, cls, profile };
+}
+function analyzeAll(){ return project.obstacles.map(analyzeObstacle); }
 
 /* ====================== 4. RENDERING ====================== */
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
@@ -541,8 +660,23 @@ function render(){
   drawDoor(openDeg,side,{fill:"rgba(230,237,243,.12)",stroke:"#e6edf3",lw:2});
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
+  drawDynamicOverlay(side);
   drawObstacles();
   drawTestPoints();
+}
+// Mark first-detection and first-contact door positions from the last run.
+function drawDynamicOverlay(side){
+  if(!dynLast || !$("dynOverlay") || !$("dynOverlay").checked) return;
+  for(const r of dynLast){
+    if(r.detectPct!=null){
+      drawDoor(doorAngleForPercent(r.detectPct,project.door,side),side,
+        {stroke:"rgba(57,211,83,.9)",lw:2});
+    }
+    if(r.contactPct!=null){
+      drawDoor(doorAngleForPercent(r.contactPct,project.door,side),side,
+        {stroke:"rgba(248,81,73,.9)",lw:2});
+    }
+  }
 }
 
 /* ====================== 5. UI PANELS / BINDING ====================== */
@@ -553,6 +687,7 @@ function bindTabs(){
     document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
     if(b.dataset.tab==="dash") renderDashboard();
+    if(b.dataset.tab==="dynamic") runDynamic();
   });
 }
 // ---- Project fields ----
@@ -796,6 +931,7 @@ function importJson(){
         project = Object.assign(defaultProject(), data); // preserve unknown fields
         project.project = Object.assign(defaultProject().project, data.project||{});
         project.door = Object.assign(defaultProject().door, data.door||{});
+        project.timing = Object.assign(defaultProject().timing, data.timing||{});
         project.view = Object.assign(defaultProject().view, data.view||{});
         // Backward compat: old top-view (widthMm) projects had no wing profile.
         if(!Array.isArray(project.door.profile) || project.door.profile.length<3){
@@ -842,6 +978,14 @@ function openReport(){
   const tpRows=tps.map(t=>`<tr><td>${t.id}</td><td>${t.doorPct}%</td><td>${t.sensorId||"—"}</td>
     <td>${Math.round(t.x)},${Math.round(t.y)},${Math.round(t.z)}</td>
     <td>${t.inFov?"YES":"NO"}</td><td>${t.blind?"YES":""}</td><td>${t.result||"—"}</td></tr>`).join("");
+  const dynRows=analyzeAll().map(r=>`<tr><td>${r.id}</td>
+    <td>${r.detectPct!=null?r.detectPct.toFixed(1)+"%":"—"}</td>
+    <td>${r.contacts?r.contactPct.toFixed(1)+"%":"no contact"}</td>
+    <td>${isFinite(r.minClear)?Math.round(r.minClear)+" mm":"—"}</td>
+    <td>${r.reactionMs!=null?Math.round(r.reactionMs)+" ms":"—"}</td>
+    <td>${Math.round(r.sysMs)} ms</td>
+    <td>${r.marginMs!=null?Math.round(r.marginMs)+" ms":"—"}</td>
+    <td><b>${r.cls}</b></td></tr>`).join("");
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8">
     <title>FOV Report — ${p.name}</title><style>
     body{font:13px/1.5 Arial;margin:32px;color:#111}
@@ -880,7 +1024,14 @@ function openReport(){
       <tr><td>Passed</td><td>${pass}</td></tr>
       <tr><td>Failed</td><td>${fail}</td></tr>
       <tr><td>Blind points</td><td>${blind}</td></tr></table>
-    <h2>6. Test Point Details</h2>
+    <h2>6. Dynamic Detection &amp; Reaction Margin (§12)</h2>
+    <p>Door open time ${d.openTimeS}s; system response ${totalResponseMs()} ms
+      (sensor ${project.timing.sensorMs} + comms ${project.timing.commMs} +
+      ECU ${project.timing.ecuMs} + motor ${project.timing.motorMs} +
+      mech ${project.timing.mechMs}); target margin ${project.timing.targetMarginMs} ms.</p>
+    <table><tr><th>Obstacle</th><th>Detect %</th><th>Contact %</th><th>Min clearance</th>
+      <th>Reaction</th><th>System</th><th>Margin</th><th>Verdict</th></tr>${dynRows}</table>
+    <h2>7. Test Point Details</h2>
     <table><tr><th>ID</th><th>Door%</th><th>Sensor</th><th>Pos (X,Y,Z)</th><th>In FOV</th><th>Blind</th><th>Result</th></tr>${tpRows}</table>
     <p style="margin-top:30px;color:#888;font-size:11px">Generated by Wing Door Sensor FOV Tool · ${new Date().toLocaleString()}</p>
     </body></html>`;
@@ -889,16 +1040,35 @@ function openReport(){
 
 /* ====================== 7. INIT / EVENTS ====================== */
 function loadAllUi(){
-  loadProjectFields(); loadDoorFields();
+  loadProjectFields(); loadDoorFields(); loadDynamicFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
   renderTpTable();
   $("doorPct").value=project.view.doorPct;
   updateDoorPctLabel();
 }
 function updateDoorPctLabel(){
-  $("doorPctVal").textContent=project.view.doorPct+"%";
-  const ang=doorAngleForPercent(project.view.doorPct,project.door,project.project.doorSide);
+  const pct=project.view.doorPct;
+  $("doorPctVal").textContent=pct.toFixed(0)+"%";
+  const ang=doorAngleForPercent(pct,project.door,project.project.doorSide);
   $("doorAngVal").textContent="("+ang.toFixed(1)+"°)";
+  const t=(project.door.openTimeS||0)*pct/100;
+  $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
+}
+function loadDynamicFields(){
+  const d=project.door, t=project.timing;
+  $("d_open").value=d.openTimeS; $("d_close").value=d.closeTimeS;
+  $("t_sensor").value=t.sensorMs; $("t_comm").value=t.commMs; $("t_ecu").value=t.ecuMs;
+  $("t_motor").value=t.motorMs; $("t_mech").value=t.mechMs; $("t_total").value=totalResponseMs(t);
+  $("t_target").value=t.targetMarginMs; $("t_clear").value=t.minClearanceMm; $("t_step").value=t.gridStepPct;
+}
+function bindDynamic(){
+  const dmap={d_open:"openTimeS",d_close:"closeTimeS"};
+  for(const id in dmap) $(id).addEventListener("input",()=>{
+    project.door[dmap[id]]=parseFloat($(id).value)||0; updateDoorPctLabel(); });
+  const tmap={t_sensor:"sensorMs",t_comm:"commMs",t_ecu:"ecuMs",t_motor:"motorMs",
+    t_mech:"mechMs",t_target:"targetMarginMs",t_clear:"minClearanceMm",t_step:"gridStepPct"};
+  for(const id in tmap) $(id).addEventListener("input",()=>{
+    project.timing[tmap[id]]=parseFloat($(id).value)||0; $("t_total").value=totalResponseMs(); });
 }
 function newProject(){
   if(!confirm("Start a new project? Unsaved data will be lost.")) return;
@@ -930,10 +1100,101 @@ function bindCanvas(){
 }
 function bindToolbar(){
   $("doorPct").addEventListener("input",()=>{
-    project.view.doorPct=parseInt($("doorPct").value,10);
+    pauseAnim();
+    project.view.doorPct=parseFloat($("doorPct").value);
     updateDoorPctLabel(); recomputeAll(); render();
   });
   ["showSwept","showGhost"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
+  $("dynOverlay").addEventListener("change",render);
+}
+
+/* ---- Animation (Phase 2). setInterval @50 Hz for reliable playback. ---- */
+let animTimer=null, animDir=0, animLast=0;
+function setDoorPct(pct){
+  pct=Math.max(0,Math.min(100,pct));
+  project.view.doorPct=pct;
+  $("doorPct").value=pct;
+  updateDoorPctLabel(); render();
+}
+function animStep(dp){ pauseAnim(); setDoorPct(project.view.doorPct+dp); }
+function pauseAnim(){ if(animTimer){clearInterval(animTimer);animTimer=null;animDir=0;} }
+function playAnim(dir){
+  pauseAnim(); animDir=dir; animLast=Date.now();
+  animTimer=setInterval(()=>{
+    const now=Date.now(), dt=(now-animLast)/1000; animLast=now;
+    const timeS = animDir>0 ? (project.door.openTimeS||5) : (project.door.closeTimeS||5);
+    const spd=parseFloat($("animSpeed").value)||1;
+    let np=project.view.doorPct + dt/Math.max(0.1,timeS)*100*spd*animDir;
+    if(np>=100){ setDoorPct(100); pauseAnim(); return; }
+    if(np<=0){ setDoorPct(0); pauseAnim(); return; }
+    setDoorPct(np);
+  },20);
+}
+
+/* ---- Dynamic analysis run + rendering (Phase 2) ---- */
+let dynLast=null; // cached results for overlay
+function runDynamic(){
+  dynLast=analyzeAll();
+  renderDynamicResults(dynLast);
+  render();
+}
+function fmtMs(v){ return v==null?"—":Math.round(v)+" ms"; }
+function fmtPct(v){ return v==null?"—":v.toFixed(1)+"%"; }
+function clsBadge(cls){
+  const m={PASS:"b-pass","NO CONTACT":"b-pass",MARGINAL:"b-cond",
+    FAIL:"b-fail","NOT DETECTED":"b-fail"};
+  return `<span class="badge ${m[cls]||'b-nt'}">${cls}</span>`;
+}
+function renderDynamicResults(res){
+  const el=$("dynResults");
+  if(!res.length){ el.innerHTML='<p class="mini">No obstacles defined.</p>'; return; }
+  let h='<table><tr><th>Obst</th><th>Detect</th><th>Contact</th><th>Min clr</th>'
+    +'<th>React</th><th>Sys</th><th>Margin</th><th>Verdict</th></tr>';
+  for(const r of res){
+    h+=`<tr><td>${r.id}</td>`
+      +`<td>${fmtPct(r.detectPct)}${r.detectTimeMs!=null?'<br><span class="mini">'+(r.detectTimeMs/1000).toFixed(2)+'s</span>':''}</td>`
+      +`<td>${r.contacts?fmtPct(r.contactPct)+'<br><span class="mini">'+(r.contactTimeMs/1000).toFixed(2)+'s</span>':'—'}</td>`
+      +`<td>${isFinite(r.minClear)?Math.round(r.minClear)+' mm':'—'}</td>`
+      +`<td>${fmtMs(r.reactionMs)}</td><td>${fmtMs(r.sysMs)}</td>`
+      +`<td class="${r.marginMs!=null&&r.marginMs<0?'danger':''}">${fmtMs(r.marginMs)}</td>`
+      +`<td>${clsBadge(r.cls)}</td></tr>`;
+  }
+  h+='</table>';
+  el.innerHTML=h;
+  drawDynChart(res[0]);
+}
+// Min door-obstacle clearance vs door% for the first obstacle.
+function drawDynChart(r){
+  const c=$("dynChart"), x=c.getContext("2d");
+  const w=c.width=c.clientWidth||300, hh=c.height;
+  x.clearRect(0,0,w,hh);
+  if(!r||!r.profile.length){ return; }
+  const pad=24, vals=r.profile.map(p=>p.clearance);
+  const vmin=Math.min(0,...vals), vmax=Math.max(...vals,10);
+  const X=pct=>pad+(w-2*pad)*pct/100;
+  const Y=v=>hh-pad-(hh-2*pad)*(v-vmin)/(vmax-vmin||1);
+  // zero line
+  x.strokeStyle="#3a4757"; x.lineWidth=1; x.beginPath();
+  x.moveTo(pad,Y(0)); x.lineTo(w-pad,Y(0)); x.stroke();
+  x.fillStyle="#93a1b0"; x.font="9px sans-serif";
+  x.fillText("clearance (mm)",pad,10); x.fillText("0",4,Y(0)+3);
+  x.fillText("door %",w-42,hh-6);
+  // clearance curve
+  x.strokeStyle="#4da3ff"; x.lineWidth=1.5; x.beginPath();
+  r.profile.forEach((p,i)=>{ const px=X(p.pct),py=Y(p.clearance); i?x.lineTo(px,py):x.moveTo(px,py); });
+  x.stroke();
+  // in-FOV band (green ticks along bottom where detected)
+  x.strokeStyle="#39d353"; x.lineWidth=2; x.beginPath();
+  r.profile.forEach(p=>{ if(p.inFov){ x.moveTo(X(p.pct),hh-pad+6); x.lineTo(X(p.pct),hh-pad+10); } });
+  x.stroke();
+  // detect + contact markers
+  const mark=(pct,col,lbl)=>{ if(pct==null)return; x.strokeStyle=col; x.setLineDash([3,3]);
+    x.beginPath(); x.moveTo(X(pct),pad-4); x.lineTo(X(pct),hh-pad); x.stroke(); x.setLineDash([]);
+    x.fillStyle=col; x.fillText(lbl,X(pct)+2,pad+6); };
+  mark(r.detectPct,"#39d353","det");
+  mark(r.contactPct,"#f85149","contact");
+  $("dynChartCap").textContent="Door–obstacle clearance vs opening % ("+r.id
+    +"). Green ticks = obstacle in FOV.";
 }
 
 /* ---- §27 validation self-tests, wing-door front view (Y-Z) ---- */
@@ -958,6 +1219,10 @@ function runSelfTests(){
   // Case 6: point beyond max range is OUT.
   const far={x:p0.x+Math.cos(p0.facing)*3000,y:p0.y+Math.sin(p0.facing)*3000};
   results.push(["6 far point OUT of FOV", pointInPolygon(far,poly)===false]);
+  // Phase 2: dynamic analysis returns a classification + clearance profile.
+  const dr=analyzeObstacle(project.obstacles[0]);
+  results.push(["dyn analysis returns verdict",
+    typeof dr.cls==="string" && dr.profile.length>0 && isFinite(dr.minClear)]);
   console.groupCollapsed("FOV tool §27 self-tests");
   results.forEach(([n,ok])=>console.log((ok?"PASS":"FAIL")+" — "+n));
   console.groupEnd();
@@ -965,7 +1230,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
