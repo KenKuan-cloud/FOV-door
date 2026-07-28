@@ -55,8 +55,12 @@ button.primary{background:var(--accent);color:#04121f;border-color:var(--accent)
 .toolbar .grp{display:flex;align-items:center;gap:6px}
 .toolbar label{color:var(--muted);font-size:11px}
 #doorPct{width:150px}
-.canvas-wrap{position:relative;flex:1;min-height:0;background:#0a0d11}
+.canvas-wrap{position:relative;flex:1;min-height:0;background:#0a0d11;display:flex}
+.canvas-pane{position:relative;flex:1;min-width:0;min-height:0}
+#pane2{border-left:1px solid var(--line)}
 canvas{display:block;width:100%;height:100%}
+.pane-label{position:absolute;top:8px;left:10px;font-size:11px;color:var(--muted);
+  background:rgba(23,28,35,.7);padding:2px 7px;border-radius:5px}
 .legend{position:absolute;top:10px;right:10px;background:rgba(23,28,35,.9);
   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px}
 .legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
@@ -256,6 +260,7 @@ a.dl{color:var(--accent)}
         <select id="viewPlane">
           <option value="front">Front (Y–Z)</option>
           <option value="top">Top (X–Y)</option>
+          <option value="split">Split (Front + Top)</option>
         </select>
       </div>
       <div class="grp">
@@ -284,7 +289,14 @@ a.dl{color:var(--accent)}
       </div>
     </div>
     <div class="canvas-wrap">
-      <canvas id="cv"></canvas>
+      <div class="canvas-pane" id="pane1">
+        <canvas id="cv"></canvas>
+        <span class="pane-label" id="cvLabel"></span>
+      </div>
+      <div class="canvas-pane" id="pane2" style="display:none">
+        <canvas id="cv2"></canvas>
+        <span class="pane-label" id="cv2Label"></span>
+      </div>
       <div class="legend">
         <div><span class="sw" style="background:var(--purple)"></span>Door swept volume</div>
         <div><span class="sw" style="background:var(--blue)"></span>Theoretical FOV</div>
@@ -346,7 +358,9 @@ function defaultProject(){
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
-    view:{ plane:"front", doorPct:0, zoom:0.14, panX:70, panY:120 }
+    view:{ plane:"front", doorPct:0 },
+    viewFront: planeDefaults("front"), // {zoom,panX,panY}
+    viewTop: planeDefaults("top")
   };
 }
 // Per-plane default pan/zoom so switching views frames the scene.
@@ -466,10 +480,13 @@ function sweptEnvelopePolygon(door, side){
   }
   return convexHull(all);
 }
-/* ---- View planes (front Y-Z / top X-Y) ---- */
-// Map a world {x:X,y:Y,z:Z} point to the active plane's 2D {x:horiz,y:vert}.
+/* ---- View planes (front Y-Z / top X-Y) ----
+   curPlane is the plane being drawn in the current render pass (set by
+   renderPane); it lets one canvas draw front and another draw top in split. */
+let curPlane="front";
+// Map a world {x:X,y:Y,z:Z} point to the current plane's 2D {x:horiz,y:vert}.
 function toPlane(w){
-  return project.view.plane==="top" ? {x:w.x, y:w.y} : {x:w.y, y:w.z};
+  return curPlane==="top" ? {x:w.x, y:w.y} : {x:w.y, y:w.z};
 }
 // Top-view door footprint: length (X) x current outboard Y-span, as {x:X,y:Y}.
 function doorFootprintTop(door, openDeg, side){
@@ -479,27 +496,37 @@ function doorFootprintTop(door, openDeg, side){
   const L=door.lengthMm||1000, x0=door.hingeX-L/2, x1=door.hingeX+L/2;
   return [{x:x0,y:ymin},{x:x1,y:ymin},{x:x1,y:ymax},{x:x0,y:ymax}];
 }
-// Top-view nominal horizontal FOV fan (X-Y). Apex at sensor (X, current Y),
-// centered on the outboard direction, spread = hFovDeg. Layout approximation
-// (beam vertical tilt not projected). Returns {x:X, y:Y}.
+// Horizontal foreshortening of a sensor's range in the top (X-Y) view: as the
+// door lifts, the beam central axis (Y-Z direction = pose.facing) tilts away
+// from horizontal, so its projection onto the ground plane shrinks by
+// |cos(elevation)| = |Y-component| of the beam direction. When the beam points
+// straight up/down this is ~0 (no horizontal coverage).
+function topForeshorten(sensor, door, openDeg, side){
+  const pose=sensorPoseAtAngle(sensor, door, openDeg, side);
+  return Math.abs(Math.cos(pose.facing));
+}
+// Top-view horizontal FOV fan (X-Y). Apex at sensor (X, current Y), centered on
+// the outboard direction, spread = hFovDeg, range foreshortened for beam tilt.
 function sensorFovTop(sensor, door, openDeg, side, segs=20){
   const pose=sensorPoseAtAngle(sensor, door, openDeg, side); // pose.x = world Y
   const cx=door.hingeX+sensor.posX, cy=pose.x;
+  const fs=topForeshorten(sensor, door, openDeg, side);
+  const maxR=sensor.maxRangeMm*fs, minR=sensor.minRangeMm*fs;
   const base = side==="RH" ? Math.PI/2 : -Math.PI/2; // +Y (RH) or -Y (LH) outboard
   const half=deg2rad(sensor.hFovDeg/2), a0=base-half, a1=base+half;
   const outer=[], inner=[];
   for(let i=0;i<=segs;i++){ const a=a0+(a1-a0)*i/segs;
-    outer.push({x:cx+Math.cos(a)*sensor.maxRangeMm, y:cy+Math.sin(a)*sensor.maxRangeMm}); }
-  if(sensor.minRangeMm>1){
+    outer.push({x:cx+Math.cos(a)*maxR, y:cy+Math.sin(a)*maxR}); }
+  if(minR>1){
     for(let i=segs;i>=0;i--){ const a=a0+(a1-a0)*i/segs;
-      inner.push({x:cx+Math.cos(a)*sensor.minRangeMm, y:cy+Math.sin(a)*sensor.minRangeMm}); }
+      inner.push({x:cx+Math.cos(a)*minR, y:cy+Math.sin(a)*minR}); }
     return outer.concat(inner);
   }
   return [{x:cx,y:cy}].concat(outer);
 }
-// Swept door envelope for the active plane.
+// Swept door envelope for the current render plane.
 function sweptEnvelopePlane(){
-  const door=project.door, side=project.project.doorSide, top=project.view.plane==="top";
+  const door=project.door, side=project.project.doorSide, top=curPlane==="top";
   let all=[];
   for(const pct of door.positionsPct){
     const od=doorAngleForPercent(pct, door, side);
@@ -576,27 +603,31 @@ function analyzeObstacle(o){
 }
 function analyzeAll(){ return project.obstacles.map(analyzeObstacle); }
 
-/* ====================== 4. RENDERING ====================== */
-const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
-let W=0,H=0,DPR=1;
-function resizeCanvas(){
+/* ====================== 4. RENDERING ======================
+   Draw functions use the module-level "current target": ctx/W/H (the canvas
+   being drawn), curPlane, and curView (its zoom/pan). renderPane() points these
+   at a canvas+plane+view so one render() can draw two panes (split view). */
+const cvEl=document.getElementById("cv"), cv2El=document.getElementById("cv2");
+let cv=cvEl, ctx=cvEl.getContext("2d");
+let W=0,H=0,DPR=1, curView=null;
+// Ensure the canvas backing store matches its CSS box; return logical size.
+function fitCanvas(canvas){
   DPR=window.devicePixelRatio||1;
-  const r=cv.parentElement.getBoundingClientRect();
-  W=r.width; H=r.height;
-  cv.width=W*DPR; cv.height=H*DPR;
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  render();
+  const r=canvas.getBoundingClientRect();
+  const w=Math.max(1,Math.round(r.width)), h=Math.max(1,Math.round(r.height));
+  if(canvas.width!==w*DPR || canvas.height!==h*DPR){ canvas.width=w*DPR; canvas.height=h*DPR; }
+  return {w,h};
 }
-// Plane: p.x = Y (horizontal, outboard), p.y = Z (up).
+// Plane point p = {x:horiz, y:vert(up)} → screen, using the current target.
 function worldToScreen(p){
-  const s=project.view.zoom;
-  return { x:W/2 + project.view.panX + p.x*s,
-           y:H/2 + project.view.panY - p.y*s };
+  const s=curView.zoom;
+  return { x:W/2 + curView.panX + p.x*s,
+           y:H/2 + curView.panY - p.y*s };
 }
 function screenToWorld(sx,sy){
-  const s=project.view.zoom;
-  return { x:(sx - W/2 - project.view.panX)/s,
-           y:-(sy - H/2 - project.view.panY)/s };
+  const s=curView.zoom;
+  return { x:(sx - W/2 - curView.panX)/s,
+           y:-(sy - H/2 - curView.panY)/s };
 }
 function polyPath(poly){
   ctx.beginPath();
@@ -607,7 +638,7 @@ function cssVar(n){return getComputedStyle(document.documentElement).getProperty
 
 function drawGrid(){
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
-  const step=500, s=project.view.zoom; // 500 mm grid
+  const step=500, s=curView.zoom; // 500 mm grid
   ctx.strokeStyle="#161b22"; ctx.lineWidth=1;
   const originS=worldToScreen({x:0,y:0});
   const spanY=W/s, spanZ=H/s; // horizontal span (Y), vertical span (Z)
@@ -623,7 +654,7 @@ function drawGrid(){
     ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
   }
   ctx.stroke();
-  const top=project.view.plane==="top";
+  const top=curPlane==="top";
   if(!top){ // ground line at Z=0 (front view only)
     ctx.strokeStyle="#3a4757"; ctx.lineWidth=1.5; ctx.beginPath();
     const g0=worldToScreen({x:-spanY,y:0}), g1=worldToScreen({x:spanY,y:0});
@@ -649,7 +680,7 @@ function fillPoly(poly,fill,stroke,lw){
 }
 // Plane-aware door outline (front polygon or top footprint).
 function drawDoor(openDeg,side,style){
-  const poly = project.view.plane==="top"
+  const poly = curPlane==="top"
     ? doorFootprintTop(project.door,openDeg,side)
     : doorPolygonAtAngle(project.door,openDeg,side);
   fillPoly(poly, style.fill, style.stroke, style.lw);
@@ -664,7 +695,7 @@ function drawHinge(){
 }
 // Draw a single sensor's FOV at a given opening angle (plane-aware).
 function drawSensorFov(s,openDeg,side,fill,stroke,lw){
-  const poly = project.view.plane==="top"
+  const poly = curPlane==="top"
     ? sensorFovTop(s,project.door,openDeg,side)
     : fovPolygon(sensorPoseAtAngle(s,project.door,openDeg,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm);
   fillPoly(poly,fill,stroke,lw);
@@ -673,7 +704,7 @@ function drawSensor(s,openDeg,side){
   if(!s.active) return;
   drawSensorFov(s,openDeg,side,"rgba(77,163,255,.16)","rgba(77,163,255,.65)",1.2);
   const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z
-  const top=project.view.plane==="top";
+  const top=curPlane==="top";
   const anchor = top ? {x:project.door.hingeX+s.posX, y:pose.x} : {x:pose.x, y:pose.y};
   const p=worldToScreen(anchor);
   // facing arrow: front = pose.facing (Y-Z); top = outboard direction
@@ -708,8 +739,30 @@ function drawTestPoints(){
       ctx.beginPath(); ctx.arc(q.x,q.y,8,0,7); ctx.stroke(); }
   }
 }
+// Dispatch: draw the active view (front/top) or both panes (split).
 function render(){
   if(!project) return;
+  const plane=project.view.plane;
+  if(plane==="split"){
+    $("pane2").style.display="block";
+    $("cvLabel").textContent="Front (Y–Z)"; $("cv2Label").textContent="Top (X–Y)";
+    renderPane(cvEl, "front", project.viewFront);
+    renderPane(cv2El, "top", project.viewTop);
+  } else {
+    $("pane2").style.display="none";
+    $("cvLabel").textContent = plane==="top" ? "Top (X–Y)" : "Front (Y–Z)";
+    renderPane(cvEl, plane, plane==="top"?project.viewTop:project.viewFront);
+  }
+}
+// Point the render target at a canvas+plane+view, then draw the scene.
+function renderPane(canvas, plane, view){
+  const d=fitCanvas(canvas);
+  cv=canvas; ctx=canvas.getContext("2d"); W=d.w; H=d.h;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  curPlane=plane; curView=view;
+  drawScene();
+}
+function drawScene(){
   const side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,project.door,side);
   drawGrid();
@@ -1003,6 +1056,15 @@ function importJson(){
         project.door = Object.assign(defaultProject().door, data.door||{});
         project.timing = Object.assign(defaultProject().timing, data.timing||{});
         project.view = Object.assign(defaultProject().view, data.view||{});
+        if(project.view.plane!=="front"&&project.view.plane!=="top"&&project.view.plane!=="split")
+          project.view.plane="front";
+        // Per-plane view transforms (backfill; migrate legacy view.zoom/pan).
+        project.viewFront = Object.assign(planeDefaults("front"), data.viewFront
+          || (data.view&&data.view.zoom!=null&&data.view.plane!=="top"
+              ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
+        project.viewTop = Object.assign(planeDefaults("top"), data.viewTop
+          || (data.view&&data.view.zoom!=null&&data.view.plane==="top"
+              ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
         // Backward compat: old top-view (widthMm) projects had no wing profile.
         if(!Array.isArray(project.door.profile) || project.door.profile.length<3){
           const w=project.door.widthMm||1000, t=(project.door.thicknessMm||60)/2;
@@ -1031,12 +1093,12 @@ function exportCsv(){
     rows.join("\n"),"text/csv");
 }
 function exportPng(){
-  cv.toBlob(b=>{ const a=document.createElement("a");
+  cvEl.toBlob(b=>{ const a=document.createElement("a");
     a.href=URL.createObjectURL(b); a.download="fov_view.png"; a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
 }
 function openReport(){
-  const png=cv.toDataURL("image/png");
+  const png=cvEl.toDataURL("image/png");
   const p=project.project, d=project.door;
   const tps=project.testPoints;
   const pass=tps.filter(t=>t.result==="PASS").length;
@@ -1145,39 +1207,51 @@ function newProject(){
   if(!confirm("Start a new project? Unsaved data will be lost.")) return;
   project=defaultProject(); seq={s:1,o:1,t:0}; loadAllUi(); recomputeAll(); render();
 }
-function resetView(){ const v=planeDefaults(project.view.plane);
-  project.view.zoom=v.zoom; project.view.panX=v.panX; project.view.panY=v.panY; render(); }
-function setViewPlane(plane){
-  pauseAnim();
-  project.view.plane=plane;
-  const v=planeDefaults(plane);
-  project.view.zoom=v.zoom; project.view.panX=v.panX; project.view.panY=v.panY;
+function resizeCanvas(){ render(); }
+// The {plane, view} shown by a given canvas element (accounts for split).
+function paneInfo(canvas){
+  if(project.view.plane==="split")
+    return canvas===cv2El ? {plane:"top",view:project.viewTop}
+                          : {plane:"front",view:project.viewFront};
+  const pl=project.view.plane;
+  return {plane:pl, view: pl==="top"?project.viewTop:project.viewFront};
+}
+function resetView(){
+  const plane=project.view.plane;
+  if(plane==="split"||plane==="front") project.viewFront=planeDefaults("front");
+  if(plane==="split"||plane==="top")   project.viewTop=planeDefaults("top");
   render();
 }
+function setViewPlane(plane){ pauseAnim(); project.view.plane=plane; render(); }
 
+let drag=null;
 function bindCanvas(){
-  cv.addEventListener("wheel",e=>{ e.preventDefault();
-    const f=e.deltaY<0?1.1:1/1.1;
-    project.view.zoom=Math.max(0.01,Math.min(2,project.view.zoom*f)); render();
-  },{passive:false});
-  let drag=null;
-  cv.addEventListener("mousedown",e=>{
-    if($("clickAdd").checked){
-      const r=cv.getBoundingClientRect();
-      const w=screenToWorld(e.clientX-r.left,e.clientY-r.top); // w.x=horiz, w.y=vert
-      if(project.view.plane==="top") // horiz=X, vert=Y; Z from field
-        addTestPoint(Math.round(w.x), Math.round(w.y), parseFloat($("tp_z").value)||0, $("tp_obs").value);
-      else // horiz=Y, vert=Z; X from field
-        addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
-      return;
-    }
-    drag={x:e.clientX,y:e.clientY,px:project.view.panX,py:project.view.panY};
+  [cvEl,cv2El].forEach(canvas=>{
+    canvas.addEventListener("wheel",e=>{ e.preventDefault();
+      const v=paneInfo(canvas).view, f=e.deltaY<0?1.1:1/1.1;
+      v.zoom=Math.max(0.01,Math.min(2,v.zoom*f)); render();
+    },{passive:false});
+    canvas.addEventListener("mousedown",e=>onCanvasDown(canvas,e));
   });
   window.addEventListener("mousemove",e=>{ if(!drag)return;
-    project.view.panX=drag.px+(e.clientX-drag.x);
-    project.view.panY=drag.py+(e.clientY-drag.y); render();
+    drag.view.panX=drag.px+(e.clientX-drag.x);
+    drag.view.panY=drag.py+(e.clientY-drag.y); render();
   });
   window.addEventListener("mouseup",()=>drag=null);
+}
+function onCanvasDown(canvas,e){
+  const info=paneInfo(canvas);
+  if($("clickAdd").checked){
+    const r=canvas.getBoundingClientRect();
+    W=r.width; H=r.height; curView=info.view; curPlane=info.plane;
+    const w=screenToWorld(e.clientX-r.left,e.clientY-r.top); // w.x=horiz, w.y=vert
+    if(info.plane==="top") // horiz=X, vert=Y; Z from field
+      addTestPoint(Math.round(w.x), Math.round(w.y), parseFloat($("tp_z").value)||0, $("tp_obs").value);
+    else // horiz=Y, vert=Z; X from field
+      addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
+    return;
+  }
+  drag={x:e.clientX,y:e.clientY,view:info.view,px:info.view.panX,py:info.view.panY};
 }
 function bindToolbar(){
   $("doorPct").addEventListener("input",()=>{
