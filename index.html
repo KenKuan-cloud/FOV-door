@@ -114,6 +114,7 @@ a.dl{color:var(--accent)}
       <button data-tab="obstacle">Obstacles</button>
       <button data-tab="test">Test Points</button>
       <button data-tab="data">Data</button>
+      <button data-tab="compare">Compare</button>
       <button data-tab="dynamic">Dynamic</button>
       <button data-tab="dash">Dashboard</button>
     </div>
@@ -250,6 +251,22 @@ a.dl{color:var(--accent)}
         <div id="repSummary" style="margin-top:12px"></div>
       </div>
 
+      <!-- Configuration comparison (Phase 3, §11.4) -->
+      <div class="panel" data-tab="compare">
+        <h2>Configuration Comparison (§11.4)</h2>
+        <p class="hint">Config A is the current project. Load a second saved project
+          as Config B to compare FOV, coverage, blind zones, and reaction margin
+          &mdash; e.g. sensor position/angle A vs B, 1 vs 2 sensors, or original vs
+          revised.</p>
+        <div class="field"><label>Config B (project JSON)</label>
+          <input id="cmpFile" type="file" accept=".json,application/json"></div>
+        <div class="row" style="align-items:center">
+          <label class="mini"><input type="checkbox" id="cmpOverlay"> Overlay Config B FOV (front view)</label>
+          <button onclick="clearCompareB()">Clear B</button>
+        </div>
+        <div id="cmpResult" style="margin-top:12px"></div>
+      </div>
+
       <!-- Dynamic door analysis (Phase 2) -->
       <div class="panel" data-tab="dynamic">
         <h2>Dynamic Door Analysis</h2>
@@ -346,6 +363,7 @@ a.dl{color:var(--accent)}
         <div><span class="sw" style="background:var(--green)"></span>Detected / PASS</div>
         <div><span class="sw" style="background:var(--red)"></span>No detect / FAIL</div>
         <div><span class="sw" style="background:var(--gray)"></span>Not tested</div>
+        <div id="legendCmp" style="display:none"><span class="sw" style="background:var(--orange)"></span>Config B FOV</div>
       </div>
     </div>
     <div class="results">
@@ -648,6 +666,81 @@ function analyzeObstacle(o){
 }
 function analyzeAll(){ return project.obstacles.map(analyzeObstacle); }
 
+/* ---- Phase 3: configuration comparison (§11.4, Page 9) ----
+   The analysis engine reads the global `project`; withProject temporarily
+   swaps it so Config B is measured with the exact same code path as A. */
+function withProject(cfg, fn){
+  const save=project; project=cfg;
+  try{ return fn(); } finally{ project=save; }
+}
+function computeConfigMetrics(cfg){
+  return withProject(cfg, ()=>{
+    const tps=cfg.testPoints||[];
+    tps.forEach(evaluateTestPoint);
+    const pass=tps.filter(t=>t.result==="PASS").length;
+    const fail=tps.filter(t=>t.result==="FAIL").length;
+    const blind=tps.filter(t=>t.blind).length;
+    const cov=tps.length?Math.round(pass/tps.length*100):0;
+    const withReps=tps.filter(t=>t.reps&&t.reps.length);
+    let nR=0,nD=0; withReps.forEach(t=>{const s=tpStats(t);nR+=s.n;nD+=s.det;});
+    const measRate=nR?Math.round(nD/nR*100):null;
+    const an=cfg.obstacles.map(analyzeObstacle);
+    const margins=an.filter(r=>r.marginMs!=null).map(r=>r.marginMs);
+    const minMargin=margins.length?Math.min(...margins):null;
+    const worst = an.some(r=>r.cls==="FAIL"||r.cls==="NOT DETECTED")?"FAIL"
+      : an.some(r=>r.cls==="MARGINAL")?"MARGINAL"
+      : an.length?"PASS":"—";
+    return { name:cfg.project.name||"(unnamed)", side:cfg.project.doorSide,
+      sensors:cfg.sensors.length, active:cfg.sensors.filter(s=>s.active).length,
+      maxOpen:cfg.door.maxOpenDeg, tps:tps.length, pass, fail, blind, cov,
+      measRate, minMargin, worst };
+  });
+}
+let compareB=null; // runtime-only loaded Config B (not persisted)
+function bindCompare(){
+  $("cmpFile").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
+    const rd=new FileReader();
+    rd.onload=()=>{ try{ compareB=normalizeLoaded(JSON.parse(rd.result)); renderCompare(); render(); }
+      catch(err){ alert("Invalid JSON: "+err.message); } };
+    rd.readAsText(f); });
+  $("cmpOverlay").addEventListener("change",render);
+}
+function clearCompareB(){ compareB=null; $("cmpFile").value=""; renderCompare(); render(); }
+function renderCompare(){
+  const el=$("cmpResult"); if(!el) return;
+  const A=computeConfigMetrics(project);
+  if(!compareB){ el.innerHTML='<p class="mini">Load a Config B file to compare.</p>'; return; }
+  const B=computeConfigMetrics(compareB);
+  // rows: [label, aVal, bVal, betterDir]  dir: +1 higher better, -1 lower better, 0 none
+  const rows=[
+    ["Name",A.name,B.name,0],["Door side",A.side,B.side,0],
+    ["Sensors (active)",`${A.sensors} (${A.active})`,`${B.sensors} (${B.active})`,0],
+    ["Max open °",A.maxOpen,B.maxOpen,0],
+    ["Test points",A.tps,B.tps,0],
+    ["PASS",A.pass,B.pass,1],["FAIL",A.fail,B.fail,-1],
+    ["Blind zones",A.blind,B.blind,-1],
+    ["Coverage %",A.cov,B.cov,1],
+    ["Measured rate %",A.measRate,B.measRate,1],
+    ["Min margin ms",A.minMargin,B.minMargin,1],
+    ["Worst verdict",A.worst,B.worst,0]
+  ];
+  const cell=(v)=>v==null?"—":v;
+  const body=rows.map(([lab,a,b,dir])=>{
+    let ca="",cb="";
+    if(dir&&a!=null&&b!=null&&a!==b){
+      const aBetter = dir>0 ? a>b : a<b;
+      if(aBetter) ca="background:rgba(57,211,83,.18)"; else cb="background:rgba(57,211,83,.18)";
+    }
+    let d="";
+    if(dir&&typeof a==="number"&&typeof b==="number") d=(b-a>0?"+":"")+(b-a);
+    return `<tr><td>${lab}</td><td style="${ca}">${cell(a)}</td>
+      <td style="${cb}">${cell(b)}</td><td class="mini">${d}</td></tr>`;
+  }).join("");
+  el.innerHTML=`<table><tr><th>Metric</th><th>A (current)</th><th>B</th><th>Δ</th></tr>${body}</table>
+    <p class="mini">Green = better value. Δ = B − A. Enable the overlay to see B's
+      door &amp; FOV (orange) on the front view.</p>`;
+}
+
 /* ====================== 4. RENDERING ======================
    Draw functions use the module-level "current target": ctx/W/H (the canvas
    being drawn), curPlane, and curView (its zoom/pan). renderPane() points these
@@ -787,6 +880,8 @@ function drawTestPoints(){
 // Dispatch: draw the active view (front/top) or both panes (split).
 function render(){
   if(!project) return;
+  const lc=$("legendCmp");
+  if(lc) lc.style.display = (compareB && $("cmpOverlay") && $("cmpOverlay").checked) ? "flex" : "none";
   const plane=project.view.plane;
   if(plane==="split"){
     $("pane2").style.display="block";
@@ -833,8 +928,22 @@ function drawScene(){
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
   drawDynamicOverlay(side);
+  drawCompareOverlay();
   drawObstacles();
   drawTestPoints();
+}
+// Overlay Config B's door + sensor FOVs (orange) at the shared door position.
+// Front view only for v1; uses B's own door/sensors/side directly (no swap).
+function drawCompareOverlay(){
+  if(curPlane!=="front" || !compareB || !$("cmpOverlay") || !$("cmpOverlay").checked) return;
+  const bs=compareB.project.doorSide;
+  const od=doorAngleForPercent(project.view.doorPct, compareB.door, bs);
+  for(const s of compareB.sensors){ if(!s.active) continue;
+    const pose=sensorPoseAtAngle(s, compareB.door, od, bs);
+    fillPoly(fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm),
+      "rgba(255,152,0,.08)","rgba(255,152,0,.55)",1);
+  }
+  fillPoly(doorPolygonAtAngle(compareB.door, od, bs), null, "rgba(255,152,0,.95)", 2);
 }
 // Mark first-detection and first-contact door positions from the last run.
 function drawDynamicOverlay(side){
@@ -861,6 +970,7 @@ function bindTabs(){
     if(b.dataset.tab==="dash") renderDashboard();
     if(b.dataset.tab==="dynamic") runDynamic();
     if(b.dataset.tab==="data") renderRepSummary();
+    if(b.dataset.tab==="compare") renderCompare();
   });
 }
 // ---- Project fields ----
@@ -1230,32 +1340,38 @@ function exportJson(){
   download((project.project.name||"project").replace(/\s+/g,"_")+".json",
     JSON.stringify(project,null,2),"application/json");
 }
+// Normalize a parsed JSON object into a fully-formed project (backfilling
+// derived fields), shared by project open and Config-B comparison load.
+function normalizeLoaded(data){
+  const pj = Object.assign(defaultProject(), data); // preserve unknown fields
+  pj.project = Object.assign(defaultProject().project, data.project||{});
+  pj.door = Object.assign(defaultProject().door, data.door||{});
+  pj.timing = Object.assign(defaultProject().timing, data.timing||{});
+  pj.eval = Object.assign(defaultProject().eval, data.eval||{});
+  pj.view = Object.assign(defaultProject().view, data.view||{});
+  if(pj.view.plane!=="front"&&pj.view.plane!=="top"&&pj.view.plane!=="split")
+    pj.view.plane="front";
+  // Per-plane view transforms (backfill; migrate legacy view.zoom/pan).
+  pj.viewFront = Object.assign(planeDefaults("front"), data.viewFront
+    || (data.view&&data.view.zoom!=null&&data.view.plane!=="top"
+        ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
+  pj.viewTop = Object.assign(planeDefaults("top"), data.viewTop
+    || (data.view&&data.view.zoom!=null&&data.view.plane==="top"
+        ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
+  // Backward compat: old top-view (widthMm) projects had no wing profile.
+  if(!Array.isArray(pj.door.profile) || pj.door.profile.length<3){
+    const w=pj.door.widthMm||1000, t=(pj.door.thicknessMm||60)/2;
+    pj.door.profile=[{y:0,z:-t},{y:-w,z:-t},{y:-w,z:t},{y:0,z:t}];
+    if(pj.door.hingeZ==null) pj.door.hingeZ=1500;
+  }
+  return pj;
+}
 function importJson(){
   const inp=document.createElement("input"); inp.type="file"; inp.accept=".json,application/json";
   inp.onchange=()=>{ const f=inp.files[0]; if(!f)return;
     const rd=new FileReader();
-    rd.onload=()=>{ try{ const data=JSON.parse(rd.result);
-        project = Object.assign(defaultProject(), data); // preserve unknown fields
-        project.project = Object.assign(defaultProject().project, data.project||{});
-        project.door = Object.assign(defaultProject().door, data.door||{});
-        project.timing = Object.assign(defaultProject().timing, data.timing||{});
-        project.eval = Object.assign(defaultProject().eval, data.eval||{});
-        project.view = Object.assign(defaultProject().view, data.view||{});
-        if(project.view.plane!=="front"&&project.view.plane!=="top"&&project.view.plane!=="split")
-          project.view.plane="front";
-        // Per-plane view transforms (backfill; migrate legacy view.zoom/pan).
-        project.viewFront = Object.assign(planeDefaults("front"), data.viewFront
-          || (data.view&&data.view.zoom!=null&&data.view.plane!=="top"
-              ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
-        project.viewTop = Object.assign(planeDefaults("top"), data.viewTop
-          || (data.view&&data.view.zoom!=null&&data.view.plane==="top"
-              ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
-        // Backward compat: old top-view (widthMm) projects had no wing profile.
-        if(!Array.isArray(project.door.profile) || project.door.profile.length<3){
-          const w=project.door.widthMm||1000, t=(project.door.thicknessMm||60)/2;
-          project.door.profile=[{y:0,z:-t},{y:-w,z:-t},{y:-w,z:t},{y:0,z:t}];
-          if(project.door.hingeZ==null) project.door.hingeZ=1500;
-        }
+    rd.onload=()=>{ try{
+        project = normalizeLoaded(JSON.parse(rd.result));
         seq={s:project.sensors.length,o:project.obstacles.length,t:project.testPoints.length};
         loadAllUi(); recomputeAll(); render();
       }catch(e){ alert("Invalid JSON: "+e.message); } };
@@ -1600,6 +1716,11 @@ function runSelfTests(){
     st && Math.round(st.rate)===75 && Math.round(st.meanMm)===110]);
   results.push(["rate classification thresholds",
     rateResult(96)==="PASS" && rateResult(92)==="CONDITIONAL PASS" && rateResult(80)==="FAIL"]);
+  // Config comparison: metrics computed via project swap; global project restored.
+  const before=project;
+  const m=computeConfigMetrics(defaultProject());
+  results.push(["config metrics + swap isolation",
+    typeof m.cov==="number" && typeof m.worst==="string" && project===before]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
@@ -1615,7 +1736,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindCompare(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
