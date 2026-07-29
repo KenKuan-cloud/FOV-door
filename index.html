@@ -115,6 +115,7 @@ a.dl{color:var(--accent)}
       <button data-tab="test">Test Points</button>
       <button data-tab="data">Data</button>
       <button data-tab="overlap">Overlap</button>
+      <button data-tab="motion">Motion</button>
       <button data-tab="compare">Compare</button>
       <button data-tab="dynamic">Dynamic</button>
       <button data-tab="dash">Dashboard</button>
@@ -266,6 +267,22 @@ a.dl{color:var(--accent)}
         </div>
         <label class="mini"><input type="checkbox" id="showOverlap"> Show overlap map (front view)</label>
         <div id="ovResult" style="margin-top:12px"></div>
+      </div>
+
+      <!-- Door-movement compensation / radar velocity (Phase 4, §13) -->
+      <div class="panel" data-tab="motion">
+        <h2>Door-Movement Compensation (§13)</h2>
+        <p class="hint">The sensor rides the door, so it has an ego velocity
+          (ω × lever&nbsp;arm). A radar sees the obstacle relative to the moving
+          sensor; the sensor's radial ego velocity must be subtracted to recover
+          the true object velocity. Computed at the current door position.</p>
+        <div id="motionOmega" class="mini" style="margin-bottom:8px"></div>
+        <label class="mini"><input type="checkbox" id="showVel"> Show sensor velocity vectors (front view)</label>
+        <p class="hint" style="margin-top:10px">Enter the radar-measured relative
+          radial velocity per obstacle — <b>closing convention, + = approaching</b>.
+          Comp = Measured − Ego radial (§13). A stationary obstacle reads Measured ≈
+          +Ego, so its compensated velocity ≈ 0.</p>
+        <div id="motionResult" style="margin-top:6px"></div>
       </div>
 
       <!-- Configuration comparison (Phase 3, §11.4) -->
@@ -731,6 +748,41 @@ function overlapAnalysis(doorPct){
     gapArea:gap*cellA, overlapRatio:cov.length?overlap/cov.length:0, maxDepth, pairs };
 }
 
+/* ---- Phase 4: door-movement compensation / radar velocity (§13) ----
+   The sensor rides the door, so it has an ego linear velocity v = ω × r about
+   the hinge. A radar measures the obstacle's velocity relative to the sensor;
+   to recover the true (ground) object velocity, the sensor's radial ego velocity
+   toward the obstacle must be subtracted. For a stationary obstacle the measured
+   relative radial velocity equals −(ego radial), so the compensated value ≈ 0. */
+function doorOmegaRadPerS(){ // signed angular velocity during opening
+  const sign = project.project.doorSide==="RH" ? 1 : -1;
+  const t = project.door.openTimeS || 5;
+  return sign * deg2rad(project.door.maxOpenDeg) / t;
+}
+function sensorVelocity(sensor, doorPct){ // ego velocity (mm/s) in Y-Z plane
+  const side=project.project.doorSide, od=doorAngleForPercent(doorPct,project.door,side);
+  const pose=sensorPoseAtAngle(sensor,project.door,od,side); // pose.x=Y, pose.y=Z
+  const rx=pose.x-project.door.hingeY, ry=pose.y-project.door.hingeZ; // lever arm
+  const w=doorOmegaRadPerS();
+  return { x:-w*ry, y:w*rx, r:Math.hypot(rx,ry), pose }; // v = ω×r in 2D
+}
+// Per active sensor × obstacle at a door position: ego radial velocity and,
+// if a measured relative velocity is supplied, the motion-compensated value.
+function motionAnalysis(doorPct){
+  const rows=[];
+  for(const s of project.sensors){ if(!s.active) continue;
+    const v=sensorVelocity(s,doorPct), spd=Math.hypot(v.x,v.y);
+    for(const o of project.obstacles){
+      const ox=o.y-v.pose.x, oy=o.z-v.pose.y, d=Math.hypot(ox,oy)||1;
+      const egoRadial=(v.x*ox+v.y*oy)/d; // mm/s, + = sensor closing on obstacle
+      rows.push({ sensor:s.id, obstacle:o.id, r:v.r, speedMps:spd/1000,
+        egoMps:egoRadial/1000, measMps:(o.measRelMps==null?null:o.measRelMps),
+        compMps:(o.measRelMps==null?null:o.measRelMps-egoRadial/1000) });
+    }
+  }
+  return rows;
+}
+
 /* ---- Phase 3: configuration comparison (§11.4, Page 9) ----
    The analysis engine reads the global `project`; withProject temporarily
    swaps it so Config B is measured with the exact same code path as A. */
@@ -832,6 +884,38 @@ function renderOverlap(){
     <table><tr><th>Sensor pair</th><th>Overlap area</th></tr>${pairRows}</table>
     <p class="mini">Grid ${a.grid} mm. Enable the map to see overlap (teal), single
       coverage (blue), and gaps (red) on the front view.</p>`;
+}
+
+/* ---- Phase 4: motion-compensation panel (§13) ---- */
+function bindMotion(){
+  $("showVel").addEventListener("change",render);
+}
+function renderMotion(){
+  const el=$("motionResult"); if(!el) return;
+  const wDegS=(doorOmegaRadPerS()*180/Math.PI);
+  $("motionOmega").innerHTML=`Door angular velocity ω = <b>${wDegS.toFixed(1)}°/s</b>
+    (${doorOmegaRadPerS().toFixed(3)} rad/s) from ${project.door.maxOpenDeg}° in
+    ${project.door.openTimeS}s · door at ${Math.round(project.view.doorPct)}%.`;
+  const rows=motionAnalysis(project.view.doorPct);
+  if(!rows.length){ el.innerHTML='<p class="mini">Need an active sensor and an obstacle.</p>'; return; }
+  const body=rows.map(r=>`<tr>
+    <td>${r.sensor}</td><td>${r.obstacle}</td>
+    <td>${Math.round(r.r)}</td>
+    <td>${r.speedMps.toFixed(2)}</td>
+    <td class="${r.egoMps>=0?'':'danger'}">${r.egoMps>=0?'+':''}${r.egoMps.toFixed(2)}</td>
+    <td><input data-obs="${r.obstacle}" class="measvel" type="number" step="0.1"
+      value="${r.measMps==null?'':r.measMps}" style="width:70px"></td>
+    <td>${r.compMps==null?'—':(r.compMps>=0?'+':'')+r.compMps.toFixed(2)}</td></tr>`).join("");
+  el.innerHTML=`<table>
+    <tr><th>Sensor</th><th>Obst</th><th>Lever mm</th><th>Ego speed m/s</th>
+      <th>Ego radial m/s</th><th>Measured m/s</th><th>Comp. m/s</th></tr>${body}</table>
+    <p class="mini">Ego radial: + = sensor closing on the obstacle (apparent
+      approach a radar must compensate). Comp = Measured − Ego radial.</p>`;
+  el.querySelectorAll(".measvel").forEach(inp=>inp.addEventListener("input",()=>{
+    const o=project.obstacles.find(x=>x.id===inp.dataset.obs);
+    if(o) o.measRelMps = inp.value===""?undefined:parseFloat(inp.value);
+    renderMotion();
+  }));
 }
 
 /* ====================== 4. RENDERING ======================
@@ -1025,8 +1109,27 @@ function drawScene(){
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
   drawDynamicOverlay(side);
   drawCompareOverlay();
+  drawVelocityVectors();
   drawObstacles();
   drawTestPoints();
+}
+// Sensor ego-velocity vectors (magenta) at the current door position, front view.
+function drawVelocityVectors(){
+  if(curPlane!=="front" || !$("showVel") || !$("showVel").checked) return;
+  const scale=0.15; // px per (mm/s); arrows are indicative
+  for(const s of project.sensors){ if(!s.active) continue;
+    const v=sensorVelocity(s, project.view.doorPct);
+    const p=worldToScreen({x:v.pose.x, y:v.pose.y});
+    const t={x:p.x+v.x*scale, y:p.y-v.y*scale}; // screen: +Z up so subtract vy
+    ctx.strokeStyle="#e879f9"; ctx.lineWidth=2; ctx.beginPath();
+    ctx.moveTo(p.x,p.y); ctx.lineTo(t.x,t.y); ctx.stroke();
+    // arrowhead
+    const ang=Math.atan2(t.y-p.y, t.x-p.x);
+    ctx.beginPath(); ctx.moveTo(t.x,t.y);
+    ctx.lineTo(t.x-8*Math.cos(ang-0.4), t.y-8*Math.sin(ang-0.4));
+    ctx.lineTo(t.x-8*Math.cos(ang+0.4), t.y-8*Math.sin(ang+0.4));
+    ctx.closePath(); ctx.fillStyle="#e879f9"; ctx.fill();
+  }
 }
 // Multi-sensor overlap heatmap (front view). Cached by door position.
 let overlapCache=null; // {pct, nSensors, data}
@@ -1084,7 +1187,13 @@ function bindTabs(){
     if(b.dataset.tab==="data") renderRepSummary();
     if(b.dataset.tab==="compare") renderCompare();
     if(b.dataset.tab==="overlap") renderOverlap();
+    if(b.dataset.tab==="motion") renderMotion();
   });
+}
+// Re-render panels whose numbers depend on the current door position.
+function refreshDoorPanels(){
+  if(document.querySelector('.panel[data-tab="motion"].active')) renderMotion();
+  if(document.querySelector('.panel[data-tab="overlap"].active')) renderOverlap();
 }
 // ---- Project fields ----
 function bindProject(){
@@ -1705,7 +1814,7 @@ function bindToolbar(){
   $("doorPct").addEventListener("input",()=>{
     pauseAnim();
     project.view.doorPct=parseFloat($("doorPct").value);
-    updateDoorPctLabel(); recomputeAll(); render();
+    updateDoorPctLabel(); recomputeAll(); render(); refreshDoorPanels();
   });
   ["showSwept","showGhost","showMeasured"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("dynOverlay").addEventListener("change",render);
@@ -1718,7 +1827,7 @@ function setDoorPct(pct){
   pct=Math.max(0,Math.min(100,pct));
   project.view.doorPct=pct;
   $("doorPct").value=pct;
-  updateDoorPctLabel(); render();
+  updateDoorPctLabel(); render(); refreshDoorPanels();
 }
 function animStep(dp){ pauseAnim(); setDoorPct(project.view.doorPct+dp); }
 function pauseAnim(){ if(animTimer){clearInterval(animTimer);animTimer=null;animDir=0;} }
@@ -1849,6 +1958,13 @@ function runSelfTests(){
     return {same,apart};
   });
   results.push(["overlap: identical>0, far-apart=0", ov.same>0 && ov.apart===0]);
+  // Motion: sensor at hinge has zero ego velocity; away-from-hinge is nonzero.
+  const mv=withProject(defaultProject(), ()=>{
+    const atHinge=Math.hypot(...(()=>{const v=sensorVelocity({posY:0,posZ:0,yawDeg:0},50);return[v.x,v.y];})());
+    const away=Math.hypot(...(()=>{const v=sensorVelocity(project.sensors[0],50);return[v.x,v.y];})());
+    return {atHinge, away};
+  });
+  results.push(["motion ego: hinge=0, away>0", mv.atHinge<1e-6 && mv.away>0]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
@@ -1864,7 +1980,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindOverlap(); bindCompare(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindOverlap(); bindMotion(); bindCompare(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
