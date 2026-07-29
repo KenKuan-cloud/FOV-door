@@ -114,6 +114,7 @@ a.dl{color:var(--accent)}
       <button data-tab="obstacle">Obstacles</button>
       <button data-tab="test">Test Points</button>
       <button data-tab="data">Data</button>
+      <button data-tab="overlap">Overlap</button>
       <button data-tab="compare">Compare</button>
       <button data-tab="dynamic">Dynamic</button>
       <button data-tab="dash">Dashboard</button>
@@ -251,6 +252,22 @@ a.dl{color:var(--accent)}
         <div id="repSummary" style="margin-top:12px"></div>
       </div>
 
+      <!-- Multi-sensor overlap analysis (Phase 4, §11.4/§24) -->
+      <div class="panel" data-tab="overlap">
+        <h2>Sensor Overlap Analysis (§11.4)</h2>
+        <p class="hint">Coverage from all active sensors at the current door
+          position: where two or more FOVs overlap (redundant, robust to a single
+          blocked sensor), where only one covers, and gaps between sensors (§24.6).
+          Sensors are rigidly mounted, so overlap is the same at every door angle.</p>
+        <div class="row">
+          <div class="field"><label>Grid step (mm)</label><input id="ov_grid" type="number"></div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <button class="primary" onclick="runOverlap()">Analyze</button></div>
+        </div>
+        <label class="mini"><input type="checkbox" id="showOverlap"> Show overlap map (front view)</label>
+        <div id="ovResult" style="margin-top:12px"></div>
+      </div>
+
       <!-- Configuration comparison (Phase 3, §11.4) -->
       <div class="panel" data-tab="compare">
         <h2>Configuration Comparison (§11.4)</h2>
@@ -364,6 +381,8 @@ a.dl{color:var(--accent)}
         <div><span class="sw" style="background:var(--red)"></span>No detect / FAIL</div>
         <div><span class="sw" style="background:var(--gray)"></span>Not tested</div>
         <div id="legendCmp" style="display:none"><span class="sw" style="background:var(--orange)"></span>Config B FOV</div>
+        <div class="legOv" style="display:none"><span class="sw" style="background:rgba(45,212,191,.7)"></span>Overlap ≥2 sensors</div>
+        <div class="legOv" style="display:none"><span class="sw" style="background:rgba(248,81,73,.7)"></span>Sensor gap</div>
       </div>
     </div>
     <div class="results">
@@ -421,6 +440,8 @@ function defaultProject(){
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
     // Repeatability detection-rate thresholds (§16), percent.
     eval:{ passRatePct:95, condRatePct:90 },
+    // Multi-sensor overlap sampling grid (§11.4, §24), mm.
+    overlap:{ gridMm:60 },
     view:{ plane:"front", doorPct:0 },
     viewFront: planeDefaults("front"), // {zoom,panX,panY}
     viewTop: planeDefaults("top")
@@ -666,6 +687,50 @@ function analyzeObstacle(o){
 }
 function analyzeAll(){ return project.obstacles.map(analyzeObstacle); }
 
+/* ---- Phase 4: multi-sensor overlap analysis (§11.4, §24) ----
+   Front-plane FOV polygons of all active sensors at a door position; a grid is
+   sampled over their bounding box and each cell counted by how many FOVs cover
+   it: 0 = gap (only flagged inside the covered hull), 1 = single, ≥2 = overlap.
+   Sensors are rigidly mounted so their mutual overlap is door-angle invariant. */
+function activeFovPolys(doorPct){
+  const side=project.project.doorSide, od=doorAngleForPercent(doorPct,project.door,side);
+  return project.sensors.filter(s=>s.active).map(s=>({ id:s.id,
+    poly:fovPolygon(sensorPoseAtAngle(s,project.door,od,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm) }));
+}
+function overlapAnalysis(doorPct){
+  const fovs=activeFovPolys(doorPct), n=fovs.length;
+  if(n<1) return {n, cells:[], grid:0, coveredArea:0, overlapArea:0, gapArea:0,
+    overlapRatio:0, maxDepth:0, pairs:[]};
+  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
+  fovs.forEach(f=>f.poly.forEach(q=>{minx=Math.min(minx,q.x);miny=Math.min(miny,q.y);
+    maxx=Math.max(maxx,q.x);maxy=Math.max(maxy,q.y);}));
+  const step=Math.max(20, project.overlap.gridMm||60), cellA=step*step/1e6; // m²
+  const cov=[], pairCount={}; let overlap=0, maxDepth=0;
+  for(let x=minx;x<=maxx;x+=step) for(let y=miny;y<=maxy;y+=step){
+    const pt={x,y}; const hit=[];
+    for(let i=0;i<n;i++) if(pointInPolygon(pt,fovs[i].poly)) hit.push(i);
+    if(hit.length){ cov.push({x,y,cnt:hit.length}); maxDepth=Math.max(maxDepth,hit.length);
+      if(hit.length>=2){ overlap++;
+        for(let i=0;i<hit.length;i++) for(let j=i+1;j<hit.length;j++){
+          const k=fovs[hit[i]].id+" ∩ "+fovs[hit[j]].id; pairCount[k]=(pairCount[k]||0)+1; } }
+    }
+  }
+  // Gaps: uncovered grid points inside the convex hull of covered cells (§24.6).
+  const cells=cov.slice(); let gap=0;
+  if(cov.length>=3){
+    const hull=convexHull(cov.map(c=>({x:c.x,y:c.y})));
+    for(let x=minx;x<=maxx;x+=step) for(let y=miny;y<=maxy;y+=step){
+      const pt={x,y};
+      if(!fovs.some(f=>pointInPolygon(pt,f.poly)) && pointInPolygon(pt,hull)){
+        gap++; cells.push({x,y,cnt:0}); }
+    }
+  }
+  const pairs=Object.entries(pairCount).map(([k,c])=>({k, area:c*cellA}))
+    .sort((a,b)=>b.area-a.area);
+  return { n, cells, grid:step, coveredArea:cov.length*cellA, overlapArea:overlap*cellA,
+    gapArea:gap*cellA, overlapRatio:cov.length?overlap/cov.length:0, maxDepth, pairs };
+}
+
 /* ---- Phase 3: configuration comparison (§11.4, Page 9) ----
    The analysis engine reads the global `project`; withProject temporarily
    swaps it so Config B is measured with the exact same code path as A. */
@@ -739,6 +804,34 @@ function renderCompare(){
   el.innerHTML=`<table><tr><th>Metric</th><th>A (current)</th><th>B</th><th>Δ</th></tr>${body}</table>
     <p class="mini">Green = better value. Δ = B − A. Enable the overlay to see B's
       door &amp; FOV (orange) on the front view.</p>`;
+}
+
+/* ---- Phase 4: overlap panel ---- */
+function runOverlap(){ overlapCache=null; renderOverlap(); render(); }
+function renderOverlap(){
+  const el=$("ovResult"); if(!el) return;
+  const a=overlapAnalysis(project.view.doorPct);
+  overlapCache={pct:Math.round(project.view.doorPct),
+    nSensors:project.sensors.filter(s=>s.active).length, data:a};
+  if(a.n===0){ el.innerHTML='<p class="mini">No active sensors.</p>'; return; }
+  if(a.n===1){ el.innerHTML='<p class="mini">Only 1 active sensor — add another sensor '
+    +'(Sensors tab) to analyze overlap.</p>'; return; }
+  const m2=v=>v.toFixed(2)+" m²";
+  const pairRows=a.pairs.length? a.pairs.map(pr=>`<tr><td>${pr.k}</td><td>${m2(pr.area)}</td></tr>`).join("")
+    : `<tr><td colspan="2" class="mini">No overlap between any sensor pair.</td></tr>`;
+  el.innerHTML=`
+    <div class="dash">
+      <div class="stat"><div class="n">${a.n}</div><div class="l">Active sensors</div></div>
+      <div class="stat"><div class="n">${a.maxDepth}</div><div class="l">Max overlap depth</div></div>
+      <div class="stat"><div class="n">${m2(a.coveredArea)}</div><div class="l">Covered area</div></div>
+      <div class="stat"><div class="n" style="color:var(--green)">${m2(a.overlapArea)}</div><div class="l">Overlap (≥2)</div></div>
+      <div class="stat"><div class="n">${(a.overlapRatio*100).toFixed(0)}%</div><div class="l">Overlap ratio</div></div>
+      <div class="stat"><div class="n ${a.gapArea>0?'danger':''}">${m2(a.gapArea)}</div><div class="l">Gap between sensors</div></div>
+    </div>
+    <p class="mini" style="margin-top:10px;color:var(--accent)">Pairwise overlap</p>
+    <table><tr><th>Sensor pair</th><th>Overlap area</th></tr>${pairRows}</table>
+    <p class="mini">Grid ${a.grid} mm. Enable the map to see overlap (teal), single
+      coverage (blue), and gaps (red) on the front view.</p>`;
 }
 
 /* ====================== 4. RENDERING ======================
@@ -882,6 +975,8 @@ function render(){
   if(!project) return;
   const lc=$("legendCmp");
   if(lc) lc.style.display = (compareB && $("cmpOverlay") && $("cmpOverlay").checked) ? "flex" : "none";
+  const ovOn = $("showOverlap") && $("showOverlap").checked && project.view.plane!=="top";
+  document.querySelectorAll(".legOv").forEach(e=>e.style.display=ovOn?"flex":"none");
   const plane=project.view.plane;
   if(plane==="split"){
     $("pane2").style.display="block";
@@ -919,6 +1014,7 @@ function drawScene(){
         drawSensorFov(s,od,side,"rgba(77,163,255,.05)","rgba(77,163,255,.18)",1); });
     }
   }
+  drawOverlapMap();
   // Measured FOV boundary from PASS points (§9.2), front plane only.
   if(curPlane==="front" && $("showMeasured").checked){
     const hull=measuredFovHull();
@@ -931,6 +1027,22 @@ function drawScene(){
   drawCompareOverlay();
   drawObstacles();
   drawTestPoints();
+}
+// Multi-sensor overlap heatmap (front view). Cached by door position.
+let overlapCache=null; // {pct, nSensors, data}
+function drawOverlapMap(){
+  if(curPlane!=="front" || !$("showOverlap") || !$("showOverlap").checked) return;
+  const pct=Math.round(project.view.doorPct), ns=project.sensors.filter(s=>s.active).length;
+  if(!overlapCache || overlapCache.pct!==pct || overlapCache.nSensors!==ns)
+    overlapCache={pct, nSensors:ns, data:overlapAnalysis(project.view.doorPct)};
+  const a=overlapCache.data, half=a.grid*curView.zoom/2;
+  for(const c of a.cells){
+    const q=worldToScreen({x:c.x,y:c.y});
+    ctx.fillStyle = c.cnt>=2 ? "rgba(45,212,191,.45)"      // overlap ≥2 (teal)
+      : c.cnt===1 ? "rgba(77,163,255,.10)"                 // single (faint blue)
+      : "rgba(248,81,73,.40)";                             // gap (red)
+    ctx.fillRect(q.x-half,q.y-half,half*2+0.5,half*2+0.5);
+  }
 }
 // Overlay Config B's door + sensor FOVs (orange) at the shared door position.
 // Front view only for v1; uses B's own door/sensors/side directly (no swap).
@@ -971,6 +1083,7 @@ function bindTabs(){
     if(b.dataset.tab==="dynamic") runDynamic();
     if(b.dataset.tab==="data") renderRepSummary();
     if(b.dataset.tab==="compare") renderCompare();
+    if(b.dataset.tab==="overlap") renderOverlap();
   });
 }
 // ---- Project fields ----
@@ -1180,7 +1293,7 @@ function measuredFovHull(){
   const pts=project.testPoints.filter(t=>t.result==="PASS").map(t=>({x:t.y,y:t.z}));
   return pts.length>=3 ? convexHull(pts) : null;
 }
-function recomputeAll(){ project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+function recomputeAll(){ overlapCache=null; project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
 
 /* ---- Phase 3: CSV data import (§19) + repeatability (§16) ---- */
@@ -1500,6 +1613,12 @@ function loadAllUi(){
 function loadDataFields(){
   const e=project.eval||{passRatePct:95,condRatePct:90};
   $("ev_pass").value=e.passRatePct; $("ev_cond").value=e.condRatePct;
+  $("ov_grid").value=(project.overlap||{gridMm:60}).gridMm;
+}
+function bindOverlap(){
+  $("ov_grid").addEventListener("input",()=>{ project.overlap.gridMm=parseFloat($("ov_grid").value)||60;
+    overlapCache=null; });
+  $("showOverlap").addEventListener("change",()=>{ overlapCache=null; render(); });
 }
 function bindData(){
   $("csvFile").addEventListener("change",e=>{ if(e.target.files[0]) onCsvFile(e.target.files[0]); });
@@ -1721,6 +1840,15 @@ function runSelfTests(){
   const m=computeConfigMetrics(defaultProject());
   results.push(["config metrics + swap isolation",
     typeof m.cov==="number" && typeof m.worst==="string" && project===before]);
+  // Overlap: two identical sensors fully overlap; two far apart do not.
+  const ov=withProject(defaultProject(), ()=>{
+    project.sensors.push(Object.assign({},project.sensors[0],{id:"S2"}));
+    const same=overlapAnalysis(0).overlapArea;
+    project.sensors[1].posZ+=4000; // move far away → no overlap
+    const apart=overlapAnalysis(0).overlapArea;
+    return {same,apart};
+  });
+  results.push(["overlap: identical>0, far-apart=0", ov.same>0 && ov.apart===0]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
@@ -1736,7 +1864,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindCompare(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindOverlap(); bindCompare(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
