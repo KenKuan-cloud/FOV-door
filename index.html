@@ -367,6 +367,13 @@ a.dl{color:var(--accent)}
           <option value="split">Split (Front + Top)</option>
           <option value="3d">3D</option>
         </select>
+        <span class="grp" id="cam3dGroup" style="display:none;gap:2px">
+          <button onclick="set3dPreset('iso')" title="Isometric">Iso</button>
+          <button onclick="set3dPreset('top')" title="Top">Top</button>
+          <button onclick="set3dPreset('front')" title="Front">Front</button>
+          <button onclick="set3dPreset('side')" title="Side">Side</button>
+          <button onclick="fit3d(false),render()" title="Fit to view">Fit</button>
+        </span>
       </div>
       <div class="grp">
         <label>Door position</label>
@@ -474,7 +481,7 @@ function defaultProject(){
     view:{ plane:"front", doorPct:0 },
     viewFront: planeDefaults("front"), // {zoom,panX,panY}
     viewTop: planeDefaults("top"),
-    view3d:{ az:-0.6, el:0.35, dist:5200, scale:1, panX:0, panY:0 }
+    view3d:{ target:[0,-600,900], dist:5200, u:[0,-1,0], v:[0,0,1], w:[1,0,0] }
   };
 }
 // Per-plane default pan/zoom so switching views frames the scene.
@@ -1148,6 +1155,7 @@ function render(){
   if(lc) lc.style.display = (compareB && $("cmpOverlay") && $("cmpOverlay").checked) ? "flex" : "none";
   const ovOn = $("showOverlap") && $("showOverlap").checked && project.view.plane!=="top";
   document.querySelectorAll(".legOv").forEach(e=>e.style.display=ovOn?"flex":"none");
+  if($("cam3dGroup")) $("cam3dGroup").style.display = project.view.plane==="3d" ? "inline-flex" : "none";
   const plane=project.view.plane;
   if(plane==="split"){
     $("pane2").style.display="block";
@@ -1155,7 +1163,7 @@ function render(){
     renderPane(cvEl, "front", project.viewFront);
     renderPane(cv2El, "top", project.viewTop);
   } else if(plane==="3d"){
-    $("pane2").style.display="none"; $("cvLabel").textContent="3D  ·  drag = orbit · wheel = zoom";
+    $("pane2").style.display="none"; $("cvLabel").textContent="3D  ·  drag = rotate · right/shift-drag = pan · wheel = zoom";
     const d=fitCanvas(cvEl); cv=cvEl; ctx=cvEl.getContext("2d"); W=d.w; H=d.h;
     ctx.setTransform(DPR,0,0,DPR,0,0);
     draw3DScene();
@@ -1207,21 +1215,66 @@ function drawScene(){
 }
 
 /* ====================== 4b. 3D VIEW (§17.2) ======================
-   Hand-rolled orbit projection (no library). World X fwd, Y left, Z up.
-   Camera orbits a target by azimuth/elevation; weak-perspective projection.
-   Faces are collected and painter-sorted by depth for a readable wireframe. */
-let cam3d={tx:0,ty:0,tz:0};
+   Hand-rolled orbit camera (no library). World X fwd, Y left, Z up.
+   Camera basis: w = forward (camera→target), u = screen-right, v = screen-up;
+   trackball rotation about camera-local axes (pole-free), screen-space pan,
+   zoom-to-cursor — replicating the STEP viewer's OrbitControls feel. Faces are
+   painter-sorted by depth for a readable wireframe. */
+const V={ add:(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]],
+  sub:(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],
+  dot:(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+  cross:(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]],
+  scale:(a,s)=>[a[0]*s,a[1]*s,a[2]*s],
+  len:a=>Math.hypot(a[0],a[1],a[2]),
+  norm:a=>{const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l];},
+  // Rodrigues: rotate vector a about unit axis k by angle t
+  rot:(a,k,t)=>{const c=Math.cos(t),s=Math.sin(t);
+    const kd=k[0]*a[0]+k[1]*a[1]+k[2]*a[2], cr=V.cross(k,a);
+    return [a[0]*c+cr[0]*s+k[0]*kd*(1-c), a[1]*c+cr[1]*s+k[1]*kd*(1-c), a[2]*c+cr[2]*s+k[2]*kd*(1-c)];} };
+function default3dCam(){ return { target:[0,-600,900], dist:5200,
+  u:[0,-1,0], v:[0,0,1], w:[1,0,0] }; }               // will be replaced by fit/iso
+function cam3f(){ return 0.95*Math.min(W,H); }
 function project3D(p){
+  const v=project.view3d, t=v.target;
+  const rel=[p.x-t[0], p.y-t[1], p.z-t[2]];
+  const cx=V.dot(rel,v.u), cy=V.dot(rel,v.v), depth=V.dot(rel,v.w)+v.dist;
+  const s=cam3f()/Math.max(50,depth);
+  return { x:W/2 + cx*s, y:H/2 - cy*s, depth };
+}
+// Build an orthonormal basis (u,v,w) from a forward direction + up hint.
+function set3dCameraDir(forward, upHint){
   const v=project.view3d;
-  let rx=p.x-cam3d.tx, ry=p.y-cam3d.ty, rz=p.z-cam3d.tz;
-  const ca=Math.cos(v.az), sa=Math.sin(v.az);
-  let xa=rx*ca - ry*sa, ya=rx*sa + ry*ca, za=rz;          // yaw about Z
-  const ce=Math.cos(v.el), se=Math.sin(v.el);
-  let yb=ya*ce - za*se, zb=ya*se + za*ce;                  // pitch about X'
-  const depth=yb + v.dist;
-  const f=0.95*Math.min(W,H);
-  const s=f/Math.max(200,depth)*v.scale;
-  return { x:W/2 + v.panX + xa*s, y:H/2 + v.panY - zb*s, depth };
+  v.w=V.norm(forward);
+  let u=V.cross(upHint, v.w); if(V.len(u)<1e-6) u=V.cross([1,0,0], v.w);
+  v.u=V.norm(u); v.v=V.norm(V.cross(v.w, v.u));
+}
+function set3dPreset(name){
+  const v=project.view3d;
+  if(name==="iso")   set3dCameraDir([1,0.8,1],[0,0,1]);
+  if(name==="front") set3dCameraDir([1,0,0],[0,0,1]);   // look along +X: Y horiz, Z up
+  if(name==="side")  set3dCameraDir([0,1,0],[0,0,1]);   // look along +Y
+  if(name==="top")   set3dCameraDir([0,0,-1],[1,0,0]);  // look down -Z, X up
+  fit3d(false); render();
+}
+// Frame the whole scene: target=bbox center, dist so it fills ~85%.
+function fit3d(resetDir){
+  const v=project.view3d, side=project.project.doorSide, d=project.door;
+  const pts=[];
+  for(const pct of d.positionsPct){ const od=doorAngleForPercent(pct,d,side);
+    const L=(d.lengthMm||1000)/2;
+    doorPolygonAtAngle(d,od,side).forEach(p=>{ pts.push([d.hingeX-L,p.x,p.y]); pts.push([d.hingeX+L,p.x,p.y]); }); }
+  project.obstacles.forEach(o=>pts.push([o.x,o.y,o.z]));
+  project.testPoints.forEach(tp=>pts.push([tp.x,tp.y,tp.z]));
+  project.sensors.forEach(s=>{ if(s.active){ const po=sensorPoseAtAngle(s,d,doorAngleForPercent(project.view.doorPct,d,side),side);
+    pts.push([d.hingeX+s.posX, po.x, po.y]); } });
+  if(!pts.length) pts.push([0,0,0]);
+  const lo=[1e9,1e9,1e9], hi=[-1e9,-1e9,-1e9];
+  pts.forEach(p=>{ for(let i=0;i<3;i++){ lo[i]=Math.min(lo[i],p[i]); hi[i]=Math.max(hi[i],p[i]); } });
+  v.target=[(lo[0]+hi[0])/2,(lo[1]+hi[1])/2,(lo[2]+hi[2])/2];
+  const maxD=Math.max(hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2],500);
+  const fovV=2*Math.atan(0.5*Math.min(W||800,H||600)/cam3f());
+  v.dist=Math.max(800, (maxD/2)/Math.tan(Math.max(0.2,fovV/2))*1.9);
+  if(resetDir) set3dCameraDir([1,0.8,1],[0,0,1]);
 }
 function line3(a,b,stroke,lw){ const pa=project3D(a),pb=project3D(b);
   ctx.strokeStyle=stroke; ctx.lineWidth=lw||1; ctx.beginPath();
@@ -1270,7 +1323,6 @@ function sensorFrustumFaces(s,openDeg,side){
 function draw3DScene(){
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
   const d=project.door, side=project.project.doorSide;
-  cam3d={tx:d.hingeX, ty:-600, tz:900};
   const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
   // ground grid (z=0)
   const g=2500, step=500;
@@ -1805,7 +1857,8 @@ function normalizeLoaded(data){
   pj.viewTop = Object.assign(planeDefaults("top"), data.viewTop
     || (data.view&&data.view.zoom!=null&&data.view.plane==="top"
         ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
-  pj.view3d = Object.assign(defaultProject().view3d, data.view3d||{});
+  pj.view3d = (data.view3d && Array.isArray(data.view3d.target) && data.view3d.w)
+    ? data.view3d : defaultProject().view3d; // legacy az/el dropped
   // Backward compat: old top-view (widthMm) projects had no wing profile.
   if(!Array.isArray(pj.door.profile) || pj.door.profile.length<3){
     const w=pj.door.widthMm||1000, t=(pj.door.thicknessMm||60)/2;
@@ -2003,34 +2056,61 @@ function resetView(){
   const plane=project.view.plane;
   if(plane==="split"||plane==="front") project.viewFront=planeDefaults("front");
   if(plane==="split"||plane==="top")   project.viewTop=planeDefaults("top");
-  if(plane==="3d") project.view3d=defaultProject().view3d;
+  if(plane==="3d") fit3d(true);
   render();
 }
-function setViewPlane(plane){ pauseAnim(); project.view.plane=plane; render(); }
+function setViewPlane(plane){ pauseAnim(); project.view.plane=plane;
+  if(plane==="3d"){ render(); fit3d(true); } render(); }
 
 let drag=null;
 function bindCanvas(){
   [cvEl,cv2El].forEach(canvas=>{
+    canvas.addEventListener("contextmenu",e=>{ if(project.view.plane==="3d") e.preventDefault(); });
     canvas.addEventListener("wheel",e=>{ e.preventDefault();
-      if(project.view.plane==="3d"){ const v=project.view3d;
-        v.dist=Math.max(800,Math.min(20000, v.dist*(e.deltaY<0?1/1.1:1.1))); render(); return; }
+      if(project.view.plane==="3d"){ zoom3dToCursor(canvas,e); return; }
       const v=paneInfo(canvas).view, f=e.deltaY<0?1.1:1/1.1;
       v.zoom=Math.max(0.01,Math.min(2,v.zoom*f)); render();
     },{passive:false});
     canvas.addEventListener("mousedown",e=>onCanvasDown(canvas,e));
   });
   window.addEventListener("mousemove",e=>{ if(!drag)return;
-    if(drag.mode==="orbit"){ const v=project.view3d;
-      v.az=drag.az+(e.clientX-drag.x)*0.008;
-      v.el=Math.max(-1.3,Math.min(1.3, drag.el-(e.clientY-drag.y)*0.008)); render(); return; }
+    if(drag.mode==="orbit3d"){ trackball3d(e.clientX-drag.x, e.clientY-drag.y);
+      drag.x=e.clientX; drag.y=e.clientY; render(); return; }
+    if(drag.mode==="pan3d"){ pan3d(e.clientX-drag.x, e.clientY-drag.y);
+      drag.x=e.clientX; drag.y=e.clientY; render(); return; }
     drag.view.panX=drag.px+(e.clientX-drag.x);
     drag.view.panY=drag.py+(e.clientY-drag.y); render();
   });
   window.addEventListener("mouseup",()=>drag=null);
 }
+// Trackball: rotate the camera basis about its own axes (pole-free).
+function trackball3d(dx,dy){
+  const v=project.view3d, sp=0.006;
+  const yaw=-dx*sp, pitch=-dy*sp;
+  // yaw about world-consistent up (v), pitch about right (u)
+  v.w=V.norm(V.rot(v.w, v.v, yaw)); v.u=V.norm(V.rot(v.u, v.v, yaw));
+  v.w=V.norm(V.rot(v.w, v.u, pitch)); v.v=V.norm(V.rot(v.v, v.u, pitch));
+  // re-orthonormalize
+  v.u=V.norm(V.cross(v.v, v.w)); v.v=V.norm(V.cross(v.w, v.u));
+}
+function pan3d(dx,dy){
+  const v=project.view3d, wpp=v.dist/cam3f();
+  v.target=V.add(v.target, V.add(V.scale(v.u, -dx*wpp), V.scale(v.v, dy*wpp)));
+}
+function zoom3dToCursor(canvas,e){
+  const v=project.view3d, r=canvas.getBoundingClientRect();
+  const cxr=(e.clientX-r.left)-W/2, cyr=-((e.clientY-r.top)-H/2);
+  const k=e.deltaY<0?1/1.1:1.1;
+  const wx=cxr*v.dist/cam3f(), wy=cyr*v.dist/cam3f();
+  v.dist=Math.max(500,Math.min(40000, v.dist*k));
+  // keep the point under the cursor fixed
+  v.target=V.add(v.target, V.add(V.scale(v.u, wx*(1-k)), V.scale(v.v, wy*(1-k))));
+  render();
+}
 function onCanvasDown(canvas,e){
   if(project.view.plane==="3d"){
-    drag={mode:"orbit", x:e.clientX, y:e.clientY, az:project.view3d.az, el:project.view3d.el};
+    const pan = (e.button===2 || e.shiftKey);
+    drag={mode: pan?"pan3d":"orbit3d", x:e.clientX, y:e.clientY};
     return;
   }
   const info=paneInfo(canvas);
@@ -2217,6 +2297,11 @@ function runSelfTests(){
   results.push(["3D door prism face count", pf.length===2+dp.door.profile.length]);
   const fr=withProject(dp, ()=>sensorFrustumFaces(dp.sensors[0],0,"LH"));
   results.push(["3D FOV frustum 5 faces + apex", fr.faces.length===5 && isFinite(fr.apex.y)]);
+  // 3D camera: set3dCameraDir builds an orthonormal (u,v,w) basis.
+  const cam=withProject(dp, ()=>{ set3dCameraDir([1,0.8,1],[0,0,1]); const v=project.view3d;
+    return {uw:V.dot(v.u,v.w), uv:V.dot(v.u,v.v), lu:V.len(v.u), lw:V.len(v.w)}; });
+  results.push(["3D camera basis orthonormal",
+    Math.abs(cam.uw)<1e-9 && Math.abs(cam.uv)<1e-9 && Math.abs(cam.lu-1)<1e-9 && Math.abs(cam.lw-1)<1e-9]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
