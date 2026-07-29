@@ -165,6 +165,17 @@ a.dl{color:var(--accent)}
             style="font-family:monospace;font-size:11px"></textarea></div>
         <button onclick="applyProfile()">Apply outline</button>
         <button onclick="resetProfile()">Reset to wing default</button>
+        <p class="mini" style="color:var(--accent);margin:12px 0 4px">Import outline from CAD (SVG)</p>
+        <div class="field"><label>SVG file</label><input id="d_svg" type="file" accept=".svg,image/svg+xml"></div>
+        <div class="row">
+          <div class="field"><label>Scale</label>
+            <select id="d_svgscale"><option value="fit">Fit to door height</option>
+              <option value="asis">As-is (mm)</option></select></div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <label class="mini"><input type="checkbox" id="d_svgflip"> Flip horizontally</label></div>
+        </div>
+        <p class="mini">Imports the largest outline; hinge is placed at its
+          top-center. Points land in the editable box above for fine-tuning.</p>
         <p class="hint">Door positions 0–100% in 10% steps are generated
           automatically (11 positions, criterion&nbsp;4). Use the door slider above
           the canvas to view any position, and enable <b>Swept FOV</b> to see all
@@ -573,7 +584,81 @@ function convexHull(pts){
   for(let i=p.length-1;i>=0;i--){ const q=p[i]; while(hi.length>=2&&cross(hi[hi.length-2],hi[hi.length-1],q)<=0)hi.pop(); hi.push(q); }
   lo.pop(); hi.pop(); return lo.concat(hi);
 }
-// Approximate door swept envelope = convex hull of all corners across positions.
+// Douglas–Peucker polyline simplification (preserves corners). pts: [{x,y}].
+function simplifyDP(pts, tol){
+  if(pts.length<3) return pts.slice();
+  const keep=new Array(pts.length).fill(false);
+  keep[0]=keep[pts.length-1]=true;
+  const stack=[[0,pts.length-1]];
+  while(stack.length){
+    const [a,b]=stack.pop(), A=pts[a], B=pts[b];
+    const dx=B.x-A.x, dy=B.y-A.y, L=Math.hypot(dx,dy)||1;
+    let idx=-1, dmax=0;
+    for(let i=a+1;i<b;i++){
+      const d=Math.abs((pts[i].x-A.x)*dy-(pts[i].y-A.y)*dx)/L;
+      if(d>dmax){ dmax=d; idx=i; }
+    }
+    if(dmax>tol && idx>-1){ keep[idx]=true; stack.push([a,idx],[idx,b]); }
+  }
+  return pts.filter((_,i)=>keep[i]);
+}
+// Simplify a closed ring: DP fails when endpoints coincide, so split the ring
+// at the vertex farthest from pts[0] and DP each arc.
+function simplifyClosed(pts, tol){
+  let r=pts.slice();
+  if(r.length>1){ const a=r[0], b=r[r.length-1];
+    if(Math.hypot(a.x-b.x,a.y-b.y)<1e-6) r.pop(); } // drop duplicate closing point
+  if(r.length<4) return r;
+  let far=0, dm=-1;
+  for(let i=1;i<r.length;i++){ const d=(r[i].x-r[0].x)**2+(r[i].y-r[0].y)**2; if(d>dm){dm=d;far=i;} }
+  const a=simplifyDP(r.slice(0,far+1), tol);
+  const b=simplifyDP(r.slice(far), tol);           // far … last
+  return a.concat(b.slice(1));                      // drop shared 'far' vertex
+}
+/* ---- Phase 4: CAD (SVG) door-outline import (§7.2) ---- */
+// Parse an SVG string → the largest closed outline as [{x,y}] (SVG y is down).
+function parseSvgOutline(text){
+  const doc=new DOMParser().parseFromString(text,"image/svg+xml");
+  if(doc.querySelector("parsererror")) throw new Error("Not valid SVG");
+  const shapes=[];
+  const ptsAttr=el=>{
+    const raw=(el.getAttribute("points")||"").trim().split(/[\s,]+/).map(Number);
+    const out=[]; for(let i=0;i+1<raw.length;i+=2) out.push({x:raw[i],y:raw[i+1]});
+    return out;
+  };
+  doc.querySelectorAll("polygon,polyline").forEach(el=>{const p=ptsAttr(el); if(p.length>=3) shapes.push(p);});
+  const paths=doc.querySelectorAll("path");
+  if(paths.length){
+    const NS="http://www.w3.org/2000/svg";
+    const svg=document.createElementNS(NS,"svg");
+    svg.setAttribute("width","0"); svg.setAttribute("height","0");
+    svg.style.position="absolute"; svg.style.left="-9999px"; document.body.appendChild(svg);
+    paths.forEach(pe=>{
+      const path=document.createElementNS(NS,"path");
+      path.setAttribute("d", pe.getAttribute("d")||"");
+      svg.appendChild(path);
+      const len=path.getTotalLength();
+      if(len>0){ const n=200, p=[]; for(let i=0;i<=n;i++){ const q=path.getPointAtLength(len*i/n); p.push({x:q.x,y:q.y}); } shapes.push(p); }
+    });
+    document.body.removeChild(svg);
+  }
+  if(!shapes.length) throw new Error("No <path>/<polygon>/<polyline> found");
+  // largest bounding-box area wins (the door silhouette)
+  const area=p=>{let a=1e9,b=1e9,c=-1e9,d=-1e9;p.forEach(q=>{a=Math.min(a,q.x);b=Math.min(b,q.y);c=Math.max(c,q.x);d=Math.max(d,q.y);});return (c-a)*(d-b);};
+  return shapes.sort((s1,s2)=>area(s2)-area(s1))[0];
+}
+// Normalize raw SVG points → door-local profile [{y,z}] (hinge = top-center at 0,0).
+function normalizeOutline(pts, opts){
+  let up=pts.map(p=>({x:p.x, z:-p.y})); // flip Y (SVG down → Z up)
+  let minx=1e9,maxx=-1e9,minz=1e9,maxz=-1e9;
+  up.forEach(p=>{minx=Math.min(minx,p.x);maxx=Math.max(maxx,p.x);minz=Math.min(minz,p.z);maxz=Math.max(maxz,p.z);});
+  let scale=1;
+  if(opts.fitHeight && (maxz-minz)>0) scale=(project.door.heightMm||1250)/(maxz-minz);
+  const cx=(minx+maxx)/2, flip=opts.flip?-1:1;
+  let prof=up.map(p=>({ y:flip*(p.x-cx)*scale, z:(p.z-maxz)*scale })); // top-center → 0,0
+  prof=simplifyClosed(prof.map(p=>({x:p.y,y:p.z})), opts.tol||8).map(p=>({y:p.x,z:p.y}));
+  return prof;
+}
 function sweptEnvelopePolygon(door, side){
   let all=[];
   for(const pct of door.positionsPct){
@@ -1218,6 +1303,7 @@ function bindDoor(){
     $(id).addEventListener("input",()=>{ project.door[map[id]]=parseFloat($(id).value)||0;
       recomputeAll(); render(); });
   }
+  $("d_svg").addEventListener("change",e=>{ if(e.target.files[0]) importDoorOutline(e.target.files[0]); });
 }
 function loadDoorFields(){
   const d=project.door;
@@ -1240,6 +1326,19 @@ function resetProfile(){
   project.door.profile=wingDefaultProfile();
   $("d_profile").value=project.door.profile.map(p=>p.y+","+p.z).join("\n");
   recomputeAll(); render();
+}
+function importDoorOutline(file){
+  const rd=new FileReader();
+  rd.onload=()=>{ try{
+      const raw=parseSvgOutline(rd.result);
+      const prof=normalizeOutline(raw, {fitHeight:$("d_svgscale").value==="fit",
+        flip:$("d_svgflip").checked, tol:8});
+      if(prof.length<3) throw new Error("Outline has too few points");
+      project.door.profile=prof;
+      $("d_profile").value=prof.map(p=>Math.round(p.y)+","+Math.round(p.z)).join("\n");
+      recomputeAll(); render();
+    }catch(e){ alert("SVG import failed: "+e.message); } };
+  rd.readAsText(file);
 }
 // ---- Sensors ----
 function addSensor(){
@@ -1965,6 +2064,16 @@ function runSelfTests(){
     return {atHinge, away};
   });
   results.push(["motion ego: hinge=0, away>0", mv.atHinge<1e-6 && mv.away>0]);
+  // CAD import: normalize a 100-unit SVG square (y-down) → top-center at 0,0,
+  // fit to door height; DP collapses a straight run to its endpoints.
+  const sq=[{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}];
+  const no=withProject(defaultProject(), ()=>normalizeOutline(sq,{fitHeight:true,flip:false,tol:8}));
+  const topZ=Math.max(...no.map(p=>p.z)), spanZ=topZ-Math.min(...no.map(p=>p.z));
+  const cy=(Math.min(...no.map(p=>p.y))+Math.max(...no.map(p=>p.y)))/2;
+  results.push(["CAD normalize: top-center@0, fit height",
+    Math.abs(topZ)<1e-6 && Math.abs(cy)<1e-6 && Math.abs(spanZ-1250)<1]);
+  results.push(["simplifyDP collapses straight run",
+    simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
