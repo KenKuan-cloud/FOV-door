@@ -365,6 +365,7 @@ a.dl{color:var(--accent)}
           <option value="front">Front (Y–Z)</option>
           <option value="top">Top (X–Y)</option>
           <option value="split">Split (Front + Top)</option>
+          <option value="3d">3D</option>
         </select>
       </div>
       <div class="grp">
@@ -472,7 +473,8 @@ function defaultProject(){
     overlap:{ gridMm:60 },
     view:{ plane:"front", doorPct:0 },
     viewFront: planeDefaults("front"), // {zoom,panX,panY}
-    viewTop: planeDefaults("top")
+    viewTop: planeDefaults("top"),
+    view3d:{ az:-0.6, el:0.35, dist:5200, scale:1, panX:0, panY:0 }
   };
 }
 // Per-plane default pan/zoom so switching views frames the scene.
@@ -1152,6 +1154,11 @@ function render(){
     $("cvLabel").textContent="Front (Y–Z)"; $("cv2Label").textContent="Top (X–Y)";
     renderPane(cvEl, "front", project.viewFront);
     renderPane(cv2El, "top", project.viewTop);
+  } else if(plane==="3d"){
+    $("pane2").style.display="none"; $("cvLabel").textContent="3D  ·  drag = orbit · wheel = zoom";
+    const d=fitCanvas(cvEl); cv=cvEl; ctx=cvEl.getContext("2d"); W=d.w; H=d.h;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    draw3DScene();
   } else {
     $("pane2").style.display="none";
     $("cvLabel").textContent = plane==="top" ? "Top (X–Y)" : "Front (Y–Z)";
@@ -1197,6 +1204,125 @@ function drawScene(){
   drawVelocityVectors();
   drawObstacles();
   drawTestPoints();
+}
+
+/* ====================== 4b. 3D VIEW (§17.2) ======================
+   Hand-rolled orbit projection (no library). World X fwd, Y left, Z up.
+   Camera orbits a target by azimuth/elevation; weak-perspective projection.
+   Faces are collected and painter-sorted by depth for a readable wireframe. */
+let cam3d={tx:0,ty:0,tz:0};
+function project3D(p){
+  const v=project.view3d;
+  let rx=p.x-cam3d.tx, ry=p.y-cam3d.ty, rz=p.z-cam3d.tz;
+  const ca=Math.cos(v.az), sa=Math.sin(v.az);
+  let xa=rx*ca - ry*sa, ya=rx*sa + ry*ca, za=rz;          // yaw about Z
+  const ce=Math.cos(v.el), se=Math.sin(v.el);
+  let yb=ya*ce - za*se, zb=ya*se + za*ce;                  // pitch about X'
+  const depth=yb + v.dist;
+  const f=0.95*Math.min(W,H);
+  const s=f/Math.max(200,depth)*v.scale;
+  return { x:W/2 + v.panX + xa*s, y:H/2 + v.panY - zb*s, depth };
+}
+function line3(a,b,stroke,lw){ const pa=project3D(a),pb=project3D(b);
+  ctx.strokeStyle=stroke; ctx.lineWidth=lw||1; ctx.beginPath();
+  ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); }
+function face3(pts3, fill, stroke, lw){ // returns {avgDepth} for sorting
+  let d=0; ctx.beginPath();
+  pts3.forEach((p,i)=>{ const q=project3D(p); d+=q.depth; i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+  ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1;ctx.stroke();}
+  return d/pts3.length;
+}
+function dot3(p,r,fill){ const q=project3D(p); ctx.beginPath(); ctx.arc(q.x,q.y,r,0,7);
+  ctx.fillStyle=fill; ctx.fill(); return q; }
+// Door prism = front silhouette (Y,Z) extruded along X by door length.
+function doorPrismFaces(openDeg,side){
+  const prof=doorPolygonAtAngle(project.door,openDeg,side); // {x:Y,y:Z}
+  const L=project.door.lengthMm||1000, x0=project.door.hingeX-L/2, x1=project.door.hingeX+L/2;
+  const faces=[];
+  const end0=prof.map(p=>({x:x0,y:p.x,z:p.y})), end1=prof.map(p=>({x:x1,y:p.x,z:p.y}));
+  faces.push({pts:end0, fill:"rgba(230,237,243,.10)", stroke:"rgba(230,237,243,.55)", lw:1});
+  faces.push({pts:end1, fill:"rgba(230,237,243,.10)", stroke:"rgba(230,237,243,.55)", lw:1});
+  for(let i=0;i<prof.length;i++){ const j=(i+1)%prof.length;
+    faces.push({pts:[end0[i],end0[j],end1[j],end1[i]],
+      fill:"rgba(230,237,243,.07)", stroke:"rgba(230,237,243,.30)", lw:1}); }
+  return faces;
+}
+// 3D FOV frustum for a sensor: hFOV spreads fore-aft (X), vFOV in the Y-Z plane.
+function sensorFrustumFaces(s,openDeg,side){
+  const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z, facing
+  const apex={x:project.door.hingeX+s.posX, y:pose.x, z:pose.y};
+  const f=pose.facing;
+  const ax={x:0,y:Math.cos(f),z:Math.sin(f)};               // beam axis (Y-Z)
+  const hx={x:1,y:0,z:0};                                    // fore-aft (hFOV)
+  const vx={x:0,y:-Math.sin(f),z:Math.cos(f)};              // in-plane ⟂ (vFOV)
+  const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2)), R=s.maxRangeMm;
+  const corner=(sh,sv)=>({ x:apex.x+R*(ax.x+sh*th*hx.x+sv*tv*vx.x),
+    y:apex.y+R*(ax.y+sh*th*hx.y+sv*tv*vx.y), z:apex.z+R*(ax.z+sh*th*hx.z+sv*tv*vx.z) });
+  const c=[corner(-1,-1),corner(1,-1),corner(1,1),corner(-1,1)];
+  const faces=[];
+  for(let i=0;i<4;i++){ faces.push({pts:[apex,c[i],c[(i+1)%4]],
+    fill:"rgba(77,163,255,.10)", stroke:"rgba(77,163,255,.4)", lw:1}); }
+  faces.push({pts:c, fill:"rgba(77,163,255,.10)", stroke:"rgba(77,163,255,.55)", lw:1});
+  return {faces, apex};
+}
+function draw3DScene(){
+  ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
+  const d=project.door, side=project.project.doorSide;
+  cam3d={tx:d.hingeX, ty:-600, tz:900};
+  const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
+  // ground grid (z=0)
+  const g=2500, step=500;
+  for(let x=-g;x<=g;x+=step){ line3({x,y:-g,z:0},{x,y:g,z:0},"#161b22",1); }
+  for(let y=-g;y<=g;y+=step){ line3({x:-g,y,z:0},{x:g,y,z:0},"#161b22",1); }
+  // axes
+  line3({x:0,y:0,z:0},{x:1500,y:0,z:0},"#5a6b7b",2); // X
+  line3({x:0,y:0,z:0},{x:0,y:1500,z:0},"#5a6b7b",2); // Y
+  line3({x:0,y:0,z:0},{x:0,y:0,z:1800},"#5a6b7b",2); // Z
+  const lx=project3D({x:1650,y:0,z:0}), ly=project3D({x:0,y:1650,z:0}), lz=project3D({x:0,y:0,z:1950});
+  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+  ctx.fillText("X",lx.x,lx.y); ctx.fillText("Y",ly.x,ly.y); ctx.fillText("Z up",lz.x,lz.y);
+  // collect depth-sorted faces: door prism + swept ghosts + FOV frustums + obstacles
+  let faces=[];
+  if($("showGhost").checked){
+    for(const pct of d.positionsPct){ const od=doorAngleForPercent(pct,d,side);
+      doorPolygonAtAngle(d,od,side); // (kept for parity)
+      const pr=doorPrismFaces(od,side);
+      pr.forEach(fc=>faces.push({...fc, fill:null, stroke:"rgba(230,237,243,.08)", lw:1})); }
+  }
+  faces=faces.concat(doorPrismFaces(openDeg,side));
+  const apexes=[];
+  for(const s of project.sensors){ if(!s.active) continue;
+    const fr=sensorFrustumFaces(s,openDeg,side); faces=faces.concat(fr.faces); apexes.push({s,apex:fr.apex}); }
+  // obstacles as vertical boxes
+  for(const o of project.obstacles){
+    const hw=Math.max(30,(o.width||60)/2), hh=(o.height||1000)/2;
+    const cxp=o.x, cyp=o.y, z0=o.z-hh, z1=o.z+hh;
+    const b=[{x:cxp-hw,y:cyp-hw},{x:cxp+hw,y:cyp-hw},{x:cxp+hw,y:cyp+hw},{x:cxp-hw,y:cyp+hw}];
+    const bot=b.map(p=>({x:p.x,y:p.y,z:z0})), top=b.map(p=>({x:p.x,y:p.y,z:z1}));
+    for(let i=0;i<4;i++){ const j=(i+1)%4; faces.push({pts:[bot[i],bot[j],top[j],top[i]],
+      fill:"rgba(255,152,0,.18)", stroke:"rgba(255,152,0,.7)", lw:1}); }
+    faces.push({pts:top, fill:"rgba(255,152,0,.25)", stroke:"rgba(255,152,0,.8)", lw:1});
+  }
+  faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
+  faces.sort((a,b)=>b.depth-a.depth);
+  faces.forEach(fc=>face3(fc.pts, fc.fill, fc.stroke, fc.lw));
+  // hinge (roof line along X)
+  line3({x:d.hingeX-(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},
+        {x:d.hingeX+(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},"#ffffff",2);
+  // sensors (foreground) + labels
+  apexes.forEach(({s,apex})=>{ const q=dot3(apex,4,cssVar("--accent"));
+    ctx.fillStyle=cssVar("--ink"); ctx.font="11px sans-serif"; ctx.fillText(s.id,q.x+6,q.y-6); });
+  // test points (foreground)
+  for(const tp of project.testPoints){
+    const col=tp.result==="PASS"?cssVar("--green"):tp.result==="FAIL"?cssVar("--red")
+      :tp.result==="CONDITIONAL PASS"?cssVar("--yellow"):cssVar("--gray");
+    dot3({x:tp.x,y:tp.y,z:tp.z},4,col);
+  }
+  // obstacle labels
+  for(const o of project.obstacles){ const q=project3D({x:o.x,y:o.y,z:o.z+(o.height||1000)/2});
+    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif"; ctx.fillText(o.id,q.x+6,q.y); }
 }
 // Sensor ego-velocity vectors (magenta) at the current door position, front view.
 function drawVelocityVectors(){
@@ -1679,6 +1805,7 @@ function normalizeLoaded(data){
   pj.viewTop = Object.assign(planeDefaults("top"), data.viewTop
     || (data.view&&data.view.zoom!=null&&data.view.plane==="top"
         ?{zoom:data.view.zoom,panX:data.view.panX,panY:data.view.panY}:{}));
+  pj.view3d = Object.assign(defaultProject().view3d, data.view3d||{});
   // Backward compat: old top-view (widthMm) projects had no wing profile.
   if(!Array.isArray(pj.door.profile) || pj.door.profile.length<3){
     const w=pj.door.widthMm||1000, t=(pj.door.thicknessMm||60)/2;
@@ -1876,6 +2003,7 @@ function resetView(){
   const plane=project.view.plane;
   if(plane==="split"||plane==="front") project.viewFront=planeDefaults("front");
   if(plane==="split"||plane==="top")   project.viewTop=planeDefaults("top");
+  if(plane==="3d") project.view3d=defaultProject().view3d;
   render();
 }
 function setViewPlane(plane){ pauseAnim(); project.view.plane=plane; render(); }
@@ -1884,18 +2012,27 @@ let drag=null;
 function bindCanvas(){
   [cvEl,cv2El].forEach(canvas=>{
     canvas.addEventListener("wheel",e=>{ e.preventDefault();
+      if(project.view.plane==="3d"){ const v=project.view3d;
+        v.dist=Math.max(800,Math.min(20000, v.dist*(e.deltaY<0?1/1.1:1.1))); render(); return; }
       const v=paneInfo(canvas).view, f=e.deltaY<0?1.1:1/1.1;
       v.zoom=Math.max(0.01,Math.min(2,v.zoom*f)); render();
     },{passive:false});
     canvas.addEventListener("mousedown",e=>onCanvasDown(canvas,e));
   });
   window.addEventListener("mousemove",e=>{ if(!drag)return;
+    if(drag.mode==="orbit"){ const v=project.view3d;
+      v.az=drag.az+(e.clientX-drag.x)*0.008;
+      v.el=Math.max(-1.3,Math.min(1.3, drag.el-(e.clientY-drag.y)*0.008)); render(); return; }
     drag.view.panX=drag.px+(e.clientX-drag.x);
     drag.view.panY=drag.py+(e.clientY-drag.y); render();
   });
   window.addEventListener("mouseup",()=>drag=null);
 }
 function onCanvasDown(canvas,e){
+  if(project.view.plane==="3d"){
+    drag={mode:"orbit", x:e.clientX, y:e.clientY, az:project.view3d.az, el:project.view3d.el};
+    return;
+  }
   const info=paneInfo(canvas);
   if($("clickAdd").checked){
     const r=canvas.getBoundingClientRect();
@@ -2074,6 +2211,12 @@ function runSelfTests(){
     Math.abs(topZ)<1e-6 && Math.abs(cy)<1e-6 && Math.abs(spanZ-1250)<1]);
   results.push(["simplifyDP collapses straight run",
     simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
+  // 3D: door prism has 2 end faces + one per profile edge; FOV frustum has 5 faces.
+  const dp=defaultProject();
+  const pf=withProject(dp, ()=>doorPrismFaces(0,"LH"));
+  results.push(["3D door prism face count", pf.length===2+dp.door.profile.length]);
+  const fr=withProject(dp, ()=>sensorFrustumFaces(dp.sensors[0],0,"LH"));
+  results.push(["3D FOV frustum 5 faces + apex", fr.faces.length===5 && isFinite(fr.apex.y)]);
   // Top view: footprint X-width == lengthMm; Y-span == door profile Y-span at 0%.
   const fp=doorFootprintTop(project.door,0,"LH");
   const fx=fp.map(p=>p.x), fy=fp.map(p=>p.y);
