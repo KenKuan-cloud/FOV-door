@@ -385,6 +385,7 @@ a.dl{color:var(--accent)}
         <label>Heatmap</label>
         <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
         <button onclick="clearHeatmap()">Clear</button>
+        <label><input type="checkbox" id="showProxLines" checked> Proximity lines</label>
       </div>
       <div class="grp">
         <label>Door position</label>
@@ -536,7 +537,8 @@ function demoSensor(){
     partNo:"", serialNo:"", posX:0, posY:-960, posZ:-1150, yawDeg:195, pitchDeg:0,
     hFovDeg:90, vFovDeg:60, minRangeMm:100, maxRangeMm:1500,
     accuracyMm:10, updateRateHz:20, latencyMs:50,
-    warningMm:800, stopMm:300, shape:"Fan", active:true };
+    warningMm:800, stopMm:300, shape:"Fan", active:true,
+    color:"#4da3ff", showFov:true };
 }
 
 /* ====================== 3. GEOMETRY ENGINE ======================
@@ -1195,7 +1197,9 @@ function drawHinge(){
   ctx.fillText("hinge (roof)", q.x+8, q.y-6);
 }
 // Draw a single sensor's FOV at a given opening angle (plane-aware).
+function sensorColor(s){ return s.color||"#4da3ff"; }
 function drawSensorFov(s,openDeg,side,fill,stroke,lw){
+  if(s.showFov===false) return;
   const poly = curPlane==="top"
     ? sensorFovTop(s,project.door,openDeg,side)
     : fovPolygon(sensorPoseAtAngle(s,project.door,openDeg,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm);
@@ -1203,17 +1207,18 @@ function drawSensorFov(s,openDeg,side,fill,stroke,lw){
 }
 function drawSensor(s,openDeg,side){
   if(!s.active) return;
-  drawSensorFov(s,openDeg,side,"rgba(77,163,255,.16)","rgba(77,163,255,.65)",1.2);
+  const c=sensorColor(s);
+  const cFill=c+"29", cEdge=c+"a6"; // ~16% and ~65% alpha
+  drawSensorFov(s,openDeg,side,cFill,cEdge,1.2);
   const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z
   const top=curPlane==="top";
   const anchor = top ? {x:project.door.hingeX+s.posX, y:pose.x} : {x:pose.x, y:pose.y};
   const p=worldToScreen(anchor);
-  // facing arrow: front = pose.facing (Y-Z); top = outboard direction
   const fa = top ? (side==="RH"?Math.PI/2:-Math.PI/2) : pose.facing;
   const tip=worldToScreen({x:anchor.x+Math.cos(fa)*400, y:anchor.y+Math.sin(fa)*400});
-  ctx.strokeStyle=cssVar("--accent"); ctx.lineWidth=2; ctx.beginPath();
+  ctx.strokeStyle=c; ctx.lineWidth=2; ctx.beginPath();
   ctx.moveTo(p.x,p.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
-  ctx.fillStyle=cssVar("--accent");
+  ctx.fillStyle=c;
   ctx.beginPath(); ctx.arc(p.x,p.y,4,0,7); ctx.fill();
   ctx.fillStyle=cssVar("--ink"); ctx.font="11px sans-serif";
   ctx.fillText(s.id, p.x+7, p.y-7);
@@ -1312,6 +1317,7 @@ function drawTestPoints(){
 }
 function drawProximityLines(){
   if(!project||!project.sensors||!project.obstacles) return;
+  if($("showProxLines") && !$("showProxLines").checked) return;
   const side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,project.door,side);
   for(const s of project.sensors){
@@ -1393,8 +1399,9 @@ function drawScene(){
     for(const pct of project.door.positionsPct){
       const od=doorAngleForPercent(pct,project.door,side);
       drawDoor(od,side,{stroke:"rgba(230,237,243,.18)",lw:1});
-      project.sensors.forEach(s=>{ if(s.active)
-        drawSensorFov(s,od,side,"rgba(77,163,255,.05)","rgba(77,163,255,.18)",1); });
+      project.sensors.forEach(s=>{ if(s.active){
+        const c=sensorColor(s);
+        drawSensorFov(s,od,side,c+"0d",c+"2e",1); } });
     }
   }
   drawOverlapMap();
@@ -1524,17 +1531,19 @@ function sensorConeFaces(s,openDeg,side){
                        ax[2]+th*Math.cos(t)*hx[2]+tv*Math.sin(t)*vx[2] ]);
     out.push({x:apex.x+R*dir[0], y:apex.y+R*dir[1], z:apex.z+R*dir[2]}); } return out; };
   const far=ring(s.maxRangeMm), faces=[];
-  const fill="rgba(77,163,255,.10)", edge="rgba(77,163,255,.42)";
+  const c=sensorColor(s);
+  const fill=c+"1a", edge=c+"6b", edgeFar=c+"99";
+  if(s.showFov===false) return {faces:[], apex};
   if(s.minRangeMm>1){
     const near=ring(s.minRangeMm);
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[near[i],near[j],far[j],far[i]], fill, stroke:edge, lw:1}); }
-    faces.push({pts:near, fill, stroke:"rgba(77,163,255,.55)", lw:1});
+    faces.push({pts:near, fill, stroke:edgeFar, lw:1});
   } else {
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[apex,far[i],far[j]], fill, stroke:edge, lw:1}); }
   }
-  faces.push({pts:far, fill, stroke:"rgba(77,163,255,.6)", lw:1.2}); // curved far cap
+  faces.push({pts:far, fill, stroke:edgeFar, lw:1.2});
   return {faces, apex};
 }
 function draw3DScene(){
@@ -1619,8 +1628,43 @@ function draw3DScene(){
   line3({x:d.hingeX-(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},
         {x:d.hingeX+(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},"#ffffff",2);
   // sensors (foreground) + labels
-  apexes.forEach(({s,apex})=>{ const q=dot3(apex,4,cssVar("--accent"));
+  apexes.forEach(({s,apex})=>{ const q=dot3(apex,4,sensorColor(s));
     ctx.fillStyle=cssVar("--ink"); ctx.font="11px sans-serif"; ctx.fillText(s.id,q.x+6,q.y-6); });
+  // proximity lines in 3D
+  if(!$("showProxLines")||$("showProxLines").checked){
+    for(const {s,apex} of apexes){
+      for(const o of project.obstacles){
+        const b=obsAABB(o);
+        const cx=clampBox(apex.x,b.x1,b.x2);
+        const cy=clampBox(apex.y,b.y1,b.y2);
+        const cz=clampBox(apex.z,b.z1,b.z2);
+        const dx=apex.x-cx,dy=apex.y-cy,dz=apex.z-cz;
+        const dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+        const col=dist<=(s.stopMm||300)?"rgba(220,50,50,0.9)":
+                  dist<=(s.warningMm||800)?"rgba(230,200,0,0.9)":"rgba(30,185,90,0.9)";
+        const cp={x:cx,y:cy,z:cz};
+        // dashed line via short segments
+        const steps=12;
+        for(let i=0;i<steps;i+=2){
+          const t0=i/steps, t1=(i+1)/steps;
+          const a={x:apex.x+(cx-apex.x)*t0, y:apex.y+(cy-apex.y)*t0, z:apex.z+(cz-apex.z)*t0};
+          const b2={x:apex.x+(cx-apex.x)*t1,y:apex.y+(cy-apex.y)*t1,z:apex.z+(cz-apex.z)*t1};
+          line3(a,b2,col,1.5);
+        }
+        dot3(cp,4,col);
+        // label at midpoint
+        const mp={x:(apex.x+cx)/2,y:(apex.y+cy)/2,z:(apex.z+cz)/2};
+        const mq=project3D(mp);
+        const label=`${s.id}→${o.id}: ${Math.round(dist)}mm`;
+        ctx.font="11px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+        const tw=ctx.measureText(label).width;
+        ctx.fillStyle="rgba(13,17,23,0.75)";
+        ctx.fillRect(mq.x-tw/2-3,mq.y-8,tw+6,16);
+        ctx.fillStyle=col; ctx.fillText(label,mq.x,mq.y);
+        ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+      }
+    }
+  }
   // test points (foreground)
   for(const tp of project.testPoints){
     const col=tp.result==="PASS"?cssVar("--green"):tp.result==="FAIL"?cssVar("--red")
@@ -1777,9 +1821,11 @@ function importDoorOutline(file){
   rd.readAsText(file);
 }
 // ---- Sensors ----
+const SENSOR_COLORS=["#4da3ff","#ff7043","#66bb6a","#ffca28","#ab47bc","#26c6da"];
 function addSensor(){
   seq.s=Math.max(seq.s, project.sensors.length);
   const s=demoSensor(); s.id="S"+(++seq.s); s.name="Sensor "+s.id;
+  s.color=SENSOR_COLORS[(seq.s-1)%SENSOR_COLORS.length];
   project.sensors.push(s); renderSensorList(); recomputeAll(); render();
 }
 function removeSensor(id){
@@ -1792,8 +1838,11 @@ function renderSensorList(){
     const d=document.createElement("div"); d.className="list-item";
     d.innerHTML=`
       <div class="top"><strong>${s.id}</strong>
-        <span><label class="mini"><input type="checkbox" ${s.active?"checked":""} data-k="active"> active</label>
-        <button onclick="removeSensor('${s.id}')">✕</button></span></div>
+        <span>
+          <label class="mini"><input type="checkbox" ${s.active?"checked":""} data-k="active"> active</label>
+          <label class="mini"><input type="checkbox" ${s.showFov===false?"":"checked"} data-k="showFov"> FOV</label>
+          <input type="color" data-k="color" value="${s.color||'#4da3ff'}" title="Sensor color" style="width:28px;height:22px;padding:1px 2px;border:none;background:none;cursor:pointer;vertical-align:middle">
+          <button onclick="removeSensor('${s.id}')">✕</button></span></div>
       <div class="field"><label>Name</label><input data-k="name" value="${s.name}"></div>
       <div class="row">
         <div class="field"><label>Type</label><select data-k="type">${
