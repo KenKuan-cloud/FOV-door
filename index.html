@@ -1467,15 +1467,55 @@ function draw3DScene(){
   const apexes=[];
   for(const s of project.sensors){ if(!s.active) continue;
     const fr=sensorConeFaces(s,openDeg,side); faces=faces.concat(fr.faces); apexes.push({s,apex:fr.apex}); }
-  // obstacles as vertical boxes
+  // obstacles — type-aware 3D shapes, grounded at z=0
+  const OBS_FLOAT=["Garage ceiling","Hanging object"]; // keep z positioning for these
   for(const o of project.obstacles){
-    const hw=Math.max(30,(o.width||60)/2), hh=(o.height||1000)/2;
-    const cxp=o.x, cyp=o.y, z0=o.z-hh, z1=o.z+hh;
-    const b=[{x:cxp-hw,y:cyp-hw},{x:cxp+hw,y:cyp-hw},{x:cxp+hw,y:cyp+hw},{x:cxp-hw,y:cyp+hw}];
-    const bot=b.map(p=>({x:p.x,y:p.y,z:z0})), top=b.map(p=>({x:p.x,y:p.y,z:z1}));
-    for(let i=0;i<4;i++){ const j=(i+1)%4; faces.push({pts:[bot[i],bot[j],top[j],top[i]],
-      fill:"rgba(255,152,0,.18)", stroke:"rgba(255,152,0,.7)", lw:1}); }
-    faces.push({pts:top, fill:"rgba(255,152,0,.25)", stroke:"rgba(255,152,0,.8)", lw:1});
+    const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
+    const shape=preset.shape, ht=Math.max(50,o.height||1000);
+    const cx=o.x, cy=o.y, w2=Math.max(20,(o.width||60)/2);
+    const fill="rgba(255,152,0,.18)", stroke="rgba(255,152,0,.75)";
+    const isFloat=OBS_FLOAT.includes(o.type);
+    const zBot=isFloat ? o.z-ht/2 : 0;
+    const zTop=isFloat ? o.z+ht/2 : ht;
+
+    if(shape==="circle"){
+      // True cylinder — 12-sided prism
+      const N=12, r=w2;
+      const ring=z=>{ const a=[]; for(let i=0;i<N;i++){
+        const t=2*Math.PI*i/N; a.push({x:cx+Math.cos(t)*r,y:cy+Math.sin(t)*r,z}); } return a; };
+      const bot=ring(zBot), top=ring(zTop);
+      for(let i=0;i<N;i++){const j=(i+1)%N;
+        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
+      faces.push({pts:top,fill,stroke,lw:1.2});  // top cap
+
+    } else if(o.type==="Flat wall"||o.type==="Garage wall"){
+      // Thin slab: wide in Y, 100 mm thick in X
+      const hd=50;
+      const b=[{x:cx-hd,y:cy-w2},{x:cx+hd,y:cy-w2},{x:cx+hd,y:cy+w2},{x:cx-hd,y:cy+w2}];
+      const bot=b.map(p=>({x:p.x,y:p.y,z:zBot})), top=b.map(p=>({x:p.x,y:p.y,z:zTop}));
+      for(let i=0;i<4;i++){const j=(i+1)%4;
+        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
+      faces.push({pts:top,fill,stroke,lw:1});
+
+    } else if(o.type==="Garage ceiling"){
+      // Horizontal slab: flat plate at o.z, 100 mm thick
+      const xExt=w2, thick=100;
+      const b=[{x:cx-xExt,y:cy-w2},{x:cx+xExt,y:cy-w2},{x:cx+xExt,y:cy+w2},{x:cx-xExt,y:cy+w2}];
+      const bot=b.map(p=>({x:p.x,y:p.y,z:o.z})), top=b.map(p=>({x:p.x,y:p.y,z:o.z+thick}));
+      for(let i=0;i<4;i++){const j=(i+1)%4;
+        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
+      faces.push({pts:[...bot].reverse(),fill,stroke,lw:1}); // underside visible from below
+      faces.push({pts:top,fill,stroke,lw:1});
+
+    } else {
+      // Rectangular box grounded at z=0
+      const hd=w2;
+      const b=[{x:cx-hd,y:cy-w2},{x:cx+hd,y:cy-w2},{x:cx+hd,y:cy+w2},{x:cx-hd,y:cy+w2}];
+      const bot=b.map(p=>({x:p.x,y:p.y,z:zBot})), top=b.map(p=>({x:p.x,y:p.y,z:zTop}));
+      for(let i=0;i<4;i++){const j=(i+1)%4;
+        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
+      faces.push({pts:top,fill,stroke,lw:1});
+    }
   }
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
   faces.sort((a,b)=>b.depth-a.depth);
@@ -1492,9 +1532,12 @@ function draw3DScene(){
       :tp.result==="CONDITIONAL PASS"?cssVar("--yellow"):cssVar("--gray");
     dot3({x:tp.x,y:tp.y,z:tp.z},4,col);
   }
-  // obstacle labels
-  for(const o of project.obstacles){ const q=project3D({x:o.x,y:o.y,z:o.z+(o.height||1000)/2});
-    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif"; ctx.fillText(o.id,q.x+6,q.y); }
+  // obstacle labels — anchored above each object's top
+  for(const o of project.obstacles){
+    const lz=OBS_FLOAT.includes(o.type)?(o.z+(o.height||1000)/2+80):(o.height||1000)+80;
+    const q=project3D({x:o.x,y:o.y,z:lz});
+    ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif";
+    ctx.fillText(o.id+" ("+o.type+")",q.x+4,q.y); }
 }
 // Sensor ego-velocity vectors (magenta) at the current door position, front view.
 function drawVelocityVectors(){
