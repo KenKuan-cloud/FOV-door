@@ -453,9 +453,9 @@ const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
 // width=Y lateral, depth=X fore-aft, height=Z vertical
 // shape: "rect" | "circle" | "hbar" | "diamond"
 const OBSTACLE_PRESETS = {
-  "Flat wall":         {width:2000, depth:100,  height:2500, shape:"rect"},
+  "Flat wall":         {width:100,  depth:2000, height:2500, shape:"rect"},
   "Pole":              {width:80,   depth:80,   height:2000, shape:"circle"},
-  "Adult-size object": {width:600,  depth:400,  height:1800, shape:"rect"},
+  "Adult-size object": {width:500,  depth:300,  height:1750, shape:"human"},
   "Hanging object":    {width:400,  depth:400,  height:600,  shape:"diamond"},
   "Low concrete block":{width:400,  depth:400,  height:200,  shape:"rect"},
   "Custom obstacle":   {width:200,  depth:200,  height:1000, shape:"rect"},
@@ -1103,9 +1103,14 @@ function drawGrid(){
   }
   ctx.stroke();
 
-  // labels — every cell when cells are large enough, every 2 cells otherwise
-  const lblStep = cellPx>=28 ? cell : cell*2;
-  const cmFmt = v => { const cm=Math.round(v/10); return cm+"cm"; };
+  // Pick label step: smallest "nice" mm interval where labels are >= 40 px apart
+  const niceSteps=[100,200,500,1000,2000,5000];
+  let lblStep=niceSteps[niceSteps.length-1];
+  for(const ns of niceSteps){ if(ns*s>=40){ lblStep=ns; break; } }
+  const cmFmt=v=>{
+    if(Math.abs(v)>=1000) return (v/1000).toFixed(v%1000===0?0:1)+"m";
+    return Math.round(v/10)+"cm";
+  };
   ctx.fillStyle=cssVar("--muted"); ctx.font="10px sans-serif";
   ctx.textAlign="center";
   for(let gy=-Math.ceil(spanY/lblStep)*lblStep; gy<=Math.ceil(spanY/lblStep)*lblStep; gy+=lblStep){
@@ -1209,14 +1214,11 @@ function drawObstacles(){
     if(shape==="circle"){
       ctx.beginPath(); ctx.arc(ctr.x,ctr.y,hw,0,Math.PI*2);
       ctx.fill(); ctx.stroke();
-      if(curPlane!=="top"){ // height bar in front/3D views
+      if(curPlane!=="top"){
         ctx.beginPath();
         ctx.moveTo(ctr.x,ctr.y-hh); ctx.lineTo(ctr.x,ctr.y+hh);
         ctx.stroke();
       }
-    } else if(shape==="hbar"){
-      ctx.fillRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
-      ctx.strokeRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
     } else if(shape==="diamond"){
       ctx.beginPath();
       ctx.moveTo(ctr.x,      ctr.y-hh);
@@ -1225,6 +1227,28 @@ function drawObstacles(){
       ctx.lineTo(ctr.x-hw,   ctr.y);
       ctx.closePath();
       ctx.fill(); ctx.stroke();
+    } else if(shape==="human"){
+      if(top){
+        // Top view: oval footprint
+        ctx.beginPath(); ctx.ellipse(ctr.x,ctr.y,hw,hh,0,0,Math.PI*2);
+        ctx.fill(); ctx.stroke();
+      } else {
+        // Front view: head circle + torso rect + two leg lines
+        const headR=Math.max(3, hh*0.13);
+        const headCy=ctr.y-hh+headR;
+        const torsoHW=hw*0.65, torsoBot=ctr.y+hh*0.35;
+        // head
+        ctx.beginPath(); ctx.arc(ctr.x,headCy,headR,0,Math.PI*2);
+        ctx.fill(); ctx.stroke();
+        // torso
+        ctx.fillRect(ctr.x-torsoHW, headCy+headR, torsoHW*2, torsoBot-(headCy+headR));
+        ctx.strokeRect(ctr.x-torsoHW, headCy+headR, torsoHW*2, torsoBot-(headCy+headR));
+        // legs
+        ctx.beginPath();
+        ctx.moveTo(ctr.x-torsoHW*0.4, torsoBot); ctx.lineTo(ctr.x-torsoHW*0.4, ctr.y+hh);
+        ctx.moveTo(ctr.x+torsoHW*0.4, torsoBot); ctx.lineTo(ctr.x+torsoHW*0.4, ctr.y+hh);
+        ctx.stroke();
+      }
     } else { // rect (default)
       ctx.fillRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
       ctx.strokeRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
@@ -1236,13 +1260,13 @@ function drawObstacles(){
     if(isMoveSelected){
       ctx.strokeStyle="#fff"; ctx.lineWidth=2.5;
       const pad=6;
-      if(shape==="circle"){
-        ctx.beginPath(); ctx.arc(ctr.x,ctr.y,hw+pad,0,Math.PI*2); ctx.stroke();
+      if(shape==="circle"||shape==="human"){
+        ctx.beginPath(); ctx.ellipse(ctr.x,ctr.y,hw+pad,hh+pad,0,0,Math.PI*2); ctx.stroke();
       } else if(shape==="diamond"){
         ctx.beginPath();
-        ctx.moveTo(ctr.x,      ctr.y-(hh+pad));
+        ctx.moveTo(ctr.x,          ctr.y-(hh+pad));
         ctx.lineTo(ctr.x+(hw+pad), ctr.y);
-        ctx.lineTo(ctr.x,      ctr.y+(hh+pad));
+        ctx.lineTo(ctr.x,          ctr.y+(hh+pad));
         ctx.lineTo(ctr.x-(hw+pad), ctr.y);
         ctx.closePath(); ctx.stroke();
       } else {
@@ -1500,6 +1524,23 @@ function draw3DScene(){
       for(let i=0;i<N;i++){const j=(i+1)%N;
         faces.push({pts:[bot[i],bot[j],top3d[j],top3d[i]],fill,stroke,lw:1});}
       faces.push({pts:top3d,fill,stroke,lw:1.2});
+
+    } else if(shape==="human"){
+      // Body box (legs+torso) grounded at z=0
+      const bodyTop=ht*0.82;
+      const bBox=[{x:cx-d2,y:cy-w2},{x:cx+d2,y:cy-w2},{x:cx+d2,y:cy+w2},{x:cx-d2,y:cy+w2}];
+      const bBot=bBox.map(p=>({...p,z:0})), bTop=bBox.map(p=>({...p,z:bodyTop}));
+      for(let i=0;i<4;i++){const j=(i+1)%4;
+        faces.push({pts:[bBot[i],bBot[j],bTop[j],bTop[i]],fill,stroke,lw:1});}
+      faces.push({pts:bTop,fill,stroke,lw:1});
+      // Head cylinder (8-sided) on top
+      const Nh=8, hr=w2*0.45;
+      const hring=z=>{ const a=[]; for(let i=0;i<Nh;i++){
+        const t=2*Math.PI*i/Nh; a.push({x:cx+Math.cos(t)*hr,y:cy+Math.sin(t)*hr,z}); } return a; };
+      const hBot=hring(bodyTop), hTop3d=hring(ht);
+      for(let i=0;i<Nh;i++){const j=(i+1)%Nh;
+        faces.push({pts:[hBot[i],hBot[j],hTop3d[j],hTop3d[i]],fill,stroke,lw:1});}
+      faces.push({pts:hTop3d,fill,stroke,lw:1.2});
 
     } else {
       // Box: width=Y, depth=X, height=Z
