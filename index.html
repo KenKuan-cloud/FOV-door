@@ -445,23 +445,20 @@ a.dl{color:var(--accent)}
 <script>
 /* ====================== 2. STATE MODEL ====================== */
 const OBSTACLE_TYPES = ["Flat wall","Pole","Adult-size object",
-  "Garage wall","Garage ceiling","Hanging object",
-  "Low concrete block","Soft object","Custom obstacle"];
+  "Hanging object","Low concrete block","Custom obstacle"];
 const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
   "Capacitive proximity","Generic distance"];
 
 // Per-type default dimensions (mm) and canvas draw shape.
+// width=Y lateral, depth=X fore-aft, height=Z vertical
 // shape: "rect" | "circle" | "hbar" | "diamond"
 const OBSTACLE_PRESETS = {
-  "Flat wall":         {width:2000, height:2500, shape:"rect"},
-  "Pole":              {width:80,   height:2000, shape:"circle"},
-  "Adult-size object": {width:600,  height:1800, shape:"rect"},
-  "Garage wall":       {width:200,  height:2800, shape:"rect"},
-  "Garage ceiling":    {width:3000, height:200,  shape:"hbar"},
-  "Hanging object":    {width:400,  height:600,  shape:"diamond"},
-  "Low concrete block":{width:400,  height:200,  shape:"rect"},
-  "Soft object":       {width:400,  height:1000, shape:"rect"},
-  "Custom obstacle":   {width:200,  height:1000, shape:"rect"},
+  "Flat wall":         {width:2000, depth:100,  height:2500, shape:"rect"},
+  "Pole":              {width:80,   depth:80,   height:2000, shape:"circle"},
+  "Adult-size object": {width:600,  depth:400,  height:1800, shape:"rect"},
+  "Hanging object":    {width:400,  depth:400,  height:600,  shape:"diamond"},
+  "Low concrete block":{width:400,  depth:400,  height:200,  shape:"rect"},
+  "Custom obstacle":   {width:200,  depth:200,  height:1000, shape:"rect"},
 };
 
 let project, seq = {s:0,o:0,t:0};
@@ -491,7 +488,7 @@ function defaultProject(){
       openTimeS:5, closeTimeS:5,
       positionsPct:[0,10,20,30,40,50,60,70,80,90,100] },
     sensors:[ demoSensor() ],
-    obstacles:[ { id:"O1", type:"Narrow metal pole", x:0, y:-1600, z:1200, width:60, height:1400 } ],
+    obstacles:[ { id:"O1", type:"Pole", x:0, y:-1600, z:1200, width:80, depth:80, height:2000 } ],
     testPoints:[],
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
@@ -1106,23 +1103,23 @@ function drawGrid(){
   }
   ctx.stroke();
 
-  // labels at major gridlines
+  // labels — every cell when cells are large enough, every 2 cells otherwise
+  const lblStep = cellPx>=28 ? cell : cell*2;
+  const cmFmt = v => { const cm=Math.round(v/10); return cm+"cm"; };
   ctx.fillStyle=cssVar("--muted"); ctx.font="10px sans-serif";
   ctx.textAlign="center";
-  for(let gy=-Math.ceil(spanY/major)*major; gy<=Math.ceil(spanY/major)*major; gy+=major){
+  for(let gy=-Math.ceil(spanY/lblStep)*lblStep; gy<=Math.ceil(spanY/lblStep)*lblStep; gy+=lblStep){
     if(gy===0) continue;
     const q=worldToScreen({x:gy,y:0});
     if(q.x<2||q.x>W-2) continue;
-    const lbl=(Math.abs(gy)>=1000?(gy/1000).toFixed(gy%1000===0?0:1)+"m":(gy)+"mm");
-    ctx.fillText(lbl, q.x, Math.min(H-4, Math.max(14, q.y-4)));
+    ctx.fillText(cmFmt(gy), q.x, Math.min(H-4, Math.max(14, q.y-4)));
   }
   ctx.textAlign="right";
-  for(let gz=-Math.ceil(spanZ/major)*major; gz<=Math.ceil(spanZ/major)*major; gz+=major){
+  for(let gz=-Math.ceil(spanZ/lblStep)*lblStep; gz<=Math.ceil(spanZ/lblStep)*lblStep; gz+=lblStep){
     if(gz===0) continue;
     const q=worldToScreen({x:0,y:gz});
     if(q.y<10||q.y>H-2) continue;
-    const lbl=(Math.abs(gz)>=1000?(gz/1000).toFixed(gz%1000===0?0:1)+"m":(gz)+"mm");
-    ctx.fillText(lbl, 44, q.y+3);
+    ctx.fillText(cmFmt(gz), 44, q.y+3);
   }
 
   const top=curPlane==="top";
@@ -1198,13 +1195,15 @@ function drawSensor(s,openDeg,side){
 }
 function drawObstacles(){
   const s=curView.zoom;
+  const top=curPlane==="top";
   for(const o of project.obstacles){
     const ctr=worldToScreen(toPlane({x:o.x,y:o.y,z:o.z}));
     const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
     const shape=preset.shape;
-    // half-extents in screen pixels (minimum 4 px so tiny objects stay visible)
-    const hw=Math.max(4,(o.width||60)/2*s);
-    const hh=Math.max(4,(o.height||1000)/2*s);
+    // Top view:   horizontal=X(depth), vertical=Y(width)
+    // Front view: horizontal=Y(width),  vertical=Z(height)
+    const hw=Math.max(4,(top?(o.depth||200):(o.width||60))/2*s);
+    const hh=Math.max(4,(top?(o.width||60):(o.height||1000))/2*s);
     ctx.fillStyle="rgba(255,152,0,.25)";
     ctx.strokeStyle=cssVar("--orange"); ctx.lineWidth=1.5;
     if(shape==="circle"){
@@ -1480,54 +1479,35 @@ function draw3DScene(){
   const apexes=[];
   for(const s of project.sensors){ if(!s.active) continue;
     const fr=sensorConeFaces(s,openDeg,side); faces=faces.concat(fr.faces); apexes.push({s,apex:fr.apex}); }
-  // obstacles — type-aware 3D shapes, grounded at z=0
-  const OBS_FLOAT=["Garage ceiling","Hanging object"]; // keep z positioning for these
+  // obstacles — type-aware 3D shapes, grounded at z=0 except Hanging object
   for(const o of project.obstacles){
     const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
     const shape=preset.shape, ht=Math.max(50,o.height||1000);
-    const cx=o.x, cy=o.y, w2=Math.max(20,(o.width||60)/2);
+    const cx=o.x, cy=o.y;
+    const w2=Math.max(20,(o.width||60)/2);   // Y half-extent (lateral)
+    const d2=Math.max(20,(o.depth||200)/2);  // X half-extent (fore-aft)
     const fill="rgba(255,152,0,.18)", stroke="rgba(255,152,0,.75)";
-    const isFloat=OBS_FLOAT.includes(o.type);
+    const isFloat=o.type==="Hanging object";
     const zBot=isFloat ? o.z-ht/2 : 0;
     const zTop=isFloat ? o.z+ht/2 : ht;
 
     if(shape==="circle"){
-      // True cylinder — 12-sided prism
+      // True cylinder — 12-sided prism using radius=w2
       const N=12, r=w2;
       const ring=z=>{ const a=[]; for(let i=0;i<N;i++){
         const t=2*Math.PI*i/N; a.push({x:cx+Math.cos(t)*r,y:cy+Math.sin(t)*r,z}); } return a; };
-      const bot=ring(zBot), top=ring(zTop);
+      const bot=ring(zBot), top3d=ring(zTop);
       for(let i=0;i<N;i++){const j=(i+1)%N;
-        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
-      faces.push({pts:top,fill,stroke,lw:1.2});  // top cap
-
-    } else if(o.type==="Flat wall"||o.type==="Garage wall"){
-      // Thin slab: wide in Y, 100 mm thick in X
-      const hd=50;
-      const b=[{x:cx-hd,y:cy-w2},{x:cx+hd,y:cy-w2},{x:cx+hd,y:cy+w2},{x:cx-hd,y:cy+w2}];
-      const bot=b.map(p=>({x:p.x,y:p.y,z:zBot})), top=b.map(p=>({x:p.x,y:p.y,z:zTop}));
-      for(let i=0;i<4;i++){const j=(i+1)%4;
-        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
-      faces.push({pts:top,fill,stroke,lw:1});
-
-    } else if(o.type==="Garage ceiling"){
-      // Horizontal slab: flat plate at o.z, 100 mm thick
-      const xExt=w2, thick=100;
-      const b=[{x:cx-xExt,y:cy-w2},{x:cx+xExt,y:cy-w2},{x:cx+xExt,y:cy+w2},{x:cx-xExt,y:cy+w2}];
-      const bot=b.map(p=>({x:p.x,y:p.y,z:o.z})), top=b.map(p=>({x:p.x,y:p.y,z:o.z+thick}));
-      for(let i=0;i<4;i++){const j=(i+1)%4;
-        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
-      faces.push({pts:[...bot].reverse(),fill,stroke,lw:1}); // underside visible from below
-      faces.push({pts:top,fill,stroke,lw:1});
+        faces.push({pts:[bot[i],bot[j],top3d[j],top3d[i]],fill,stroke,lw:1});}
+      faces.push({pts:top3d,fill,stroke,lw:1.2});
 
     } else {
-      // Rectangular box grounded at z=0
-      const hd=w2;
-      const b=[{x:cx-hd,y:cy-w2},{x:cx+hd,y:cy-w2},{x:cx+hd,y:cy+w2},{x:cx-hd,y:cy+w2}];
-      const bot=b.map(p=>({x:p.x,y:p.y,z:zBot})), top=b.map(p=>({x:p.x,y:p.y,z:zTop}));
+      // Box: width=Y, depth=X, height=Z
+      const b=[{x:cx-d2,y:cy-w2},{x:cx+d2,y:cy-w2},{x:cx+d2,y:cy+w2},{x:cx-d2,y:cy+w2}];
+      const bot=b.map(p=>({x:p.x,y:p.y,z:zBot})), top3d=b.map(p=>({x:p.x,y:p.y,z:zTop}));
       for(let i=0;i<4;i++){const j=(i+1)%4;
-        faces.push({pts:[bot[i],bot[j],top[j],top[i]],fill,stroke,lw:1});}
-      faces.push({pts:top,fill,stroke,lw:1});
+        faces.push({pts:[bot[i],bot[j],top3d[j],top3d[i]],fill,stroke,lw:1});}
+      faces.push({pts:top3d,fill,stroke,lw:1});
     }
   }
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
@@ -1547,7 +1527,7 @@ function draw3DScene(){
   }
   // obstacle labels — anchored above each object's top
   for(const o of project.obstacles){
-    const lz=OBS_FLOAT.includes(o.type)?(o.z+(o.height||1000)/2+80):(o.height||1000)+80;
+    const lz=o.type==="Hanging object"?(o.z+(o.height||1000)/2+80):(o.height||1000)+80;
     const q=project3D({x:o.x,y:o.y,z:lz});
     ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif";
     ctx.fillText(o.id+" ("+o.type+")",q.x+4,q.y); }
@@ -1750,7 +1730,7 @@ function addObstacle(){
   seq.o=Math.max(seq.o, project.obstacles.length);
   const def=OBSTACLE_PRESETS["Pole"];
   const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:1000,
-    width:def.width,height:def.height};
+    width:def.width,depth:def.depth,height:def.height};
   project.obstacles.push(o); renderObstacleList(); refreshObstacleSelect(); render();
 }
 function removeObstacle(id){
@@ -1771,8 +1751,9 @@ function renderObstacleList(){
         <div class="field"><label>Z</label><input type="number" data-k="z" value="${o.z}"></div>
       </div>
       <div class="row">
-        <div class="field"><label>Width</label><input type="number" data-k="width" value="${o.width}"></div>
-        <div class="field"><label>Height</label><input type="number" data-k="height" value="${o.height}"></div>
+        <div class="field"><label>Width (Y mm)</label><input type="number" data-k="width" value="${o.width}"></div>
+        <div class="field"><label>Depth (X mm)</label><input type="number" data-k="depth" value="${o.depth||200}"></div>
+        <div class="field"><label>Height (Z mm)</label><input type="number" data-k="height" value="${o.height}"></div>
       </div>`;
     d.querySelectorAll("[data-k]").forEach(inp=>{
       inp.addEventListener("input",()=>{
@@ -1782,8 +1763,9 @@ function renderObstacleList(){
           // apply preset defaults when type changes
           const preset=OBSTACLE_PRESETS[o.type];
           if(preset){
-            o.width=preset.width; o.height=preset.height;
+            o.width=preset.width; o.depth=preset.depth; o.height=preset.height;
             d.querySelector("[data-k=width]").value=preset.width;
+            d.querySelector("[data-k=depth]").value=preset.depth;
             d.querySelector("[data-k=height]").value=preset.height;
           }
         }
