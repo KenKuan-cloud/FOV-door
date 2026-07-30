@@ -439,6 +439,19 @@ a.dl{color:var(--accent)}
         <tbody id="tpBody"></tbody>
       </table>
     </div>
+    <div id="distPanel" style="background:var(--panel2);border-top:1px solid var(--line);padding:6px 12px;font-size:11px;overflow-x:auto">
+      <strong style="color:var(--accent);font-size:11px">Proximity — sensor / door to obstacle</strong>
+      <table id="distTable" style="width:100%;margin-top:4px;border-collapse:collapse">
+        <thead><tr style="color:var(--muted)">
+          <th style="text-align:left;padding:2px 6px">Pair</th>
+          <th style="padding:2px 6px">Direct (mm)</th>
+          <th style="padding:2px 6px">ΔX fwd</th>
+          <th style="padding:2px 6px">ΔY lat</th>
+          <th style="padding:2px 6px">ΔZ up</th>
+        </tr></thead>
+        <tbody id="distBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -488,7 +501,7 @@ function defaultProject(){
       openTimeS:5, closeTimeS:5,
       positionsPct:[0,10,20,30,40,50,60,70,80,90,100] },
     sensors:[ demoSensor() ],
-    obstacles:[ { id:"O1", type:"Pole", x:0, y:-1600, z:1200, width:80, depth:80, height:2000 } ],
+    obstacles:[ { id:"O1", type:"Pole", x:0, y:-1600, z:0, width:80, depth:80, height:2000 } ],
     testPoints:[],
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
@@ -514,7 +527,7 @@ function totalResponseMs(t){ t=t||project.timing;
 function demoSensor(){
   // Door-local: near the lower outer (leading) edge, facing outboard-and-down.
   return { id:"S1", name:"Lower outer edge", type:"Ultrasonic",
-    partNo:"", serialNo:"", posX:0, posY:-960, posZ:-1150, yawDeg:195,
+    partNo:"", serialNo:"", posX:0, posY:-960, posZ:-1150, yawDeg:195, pitchDeg:0,
     hFovDeg:90, vFovDeg:60, minRangeMm:100, maxRangeMm:1500,
     accuracyMm:10, updateRateHz:20, latencyMs:50,
     warningMm:800, stopMm:300, shape:"Fan", active:true };
@@ -1202,7 +1215,9 @@ function drawObstacles(){
   const s=curView.zoom;
   const top=curPlane==="top";
   for(const o of project.obstacles){
-    const ctr=worldToScreen(toPlane({x:o.x,y:o.y,z:o.z}));
+    // o.z = bottom of obstacle; display center is at z + height/2 in front view
+    const dispZ = o.z + (o.height||1000)/2;
+    const ctr=worldToScreen(toPlane({x:o.x,y:o.y,z:dispZ}));
     const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
     const shape=preset.shape;
     // Top view:   horizontal=X(depth), vertical=Y(width)
@@ -1291,6 +1306,7 @@ function drawTestPoints(){
 // Dispatch: draw the active view (front/top) or both panes (split).
 function render(){
   if(!project) return;
+  updateDistPanel();
   const lc=$("legendCmp");
   if(lc) lc.style.display = (compareB && $("cmpOverlay") && $("cmpOverlay").checked) ? "flex" : "none";
   const ovOn = $("showOverlap") && $("showOverlap").checked && project.view.plane!=="top";
@@ -1452,9 +1468,11 @@ function sensorConeFaces(s,openDeg,side){
   const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z, facing
   const apex={x:project.door.hingeX+s.posX, y:pose.x, z:pose.y};
   const f=pose.facing, N=28;
-  const ax=[0,Math.cos(f),Math.sin(f)];      // beam axis (Y-Z)
-  const hx=[1,0,0];                            // fore-aft cross-axis (hFOV)
-  const vx=[0,-Math.sin(f),Math.cos(f)];     // in-plane cross-axis (vFOV)
+  // Pitch rotates beam axis toward +X (positive = forward); keeps vx in Y-Z plane
+  const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
+  const ax=[sp,            Math.cos(f)*cp, Math.sin(f)*cp];  // beam axis (yaw + pitch)
+  const hx=[cp,           -Math.cos(f)*sp,-Math.sin(f)*sp];  // fore-aft spread axis
+  const vx=[0,            -Math.sin(f),    Math.cos(f)    ];  // elevation spread axis
   const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
   const ring=(R)=>{ const out=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
     const dir=V.norm([ ax[0]+th*Math.cos(t)*hx[0]+tv*Math.sin(t)*vx[0],
@@ -1511,9 +1529,8 @@ function draw3DScene(){
     const w2=Math.max(20,(o.width||60)/2);   // Y half-extent (lateral)
     const d2=Math.max(20,(o.depth||200)/2);  // X half-extent (fore-aft)
     const fill="rgba(255,152,0,.18)", stroke="rgba(255,152,0,.75)";
-    const isFloat=o.type==="Hanging object";
-    const zBot=isFloat ? o.z-ht/2 : 0;
-    const zTop=isFloat ? o.z+ht/2 : ht;
+    // o.z = bottom of obstacle
+    const zBot=o.z, zTop=o.z+ht;
 
     if(shape==="circle"){
       // True cylinder — 12-sided prism using radius=w2
@@ -1568,7 +1585,7 @@ function draw3DScene(){
   }
   // obstacle labels — anchored above each object's top
   for(const o of project.obstacles){
-    const lz=o.type==="Hanging object"?(o.z+(o.height||1000)/2+80):(o.height||1000)+80;
+    const lz=o.z+(o.height||1000)+80;
     const q=project3D({x:o.x,y:o.y,z:lz});
     ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif";
     ctx.fillText(o.id+" ("+o.type+")",q.x+4,q.y); }
@@ -1745,6 +1762,9 @@ function renderSensorList(){
       </div>
       <div class="row">
         <div class="field"><label>Yaw (°)</label><input type="number" data-k="yawDeg" value="${s.yawDeg}"></div>
+        <div class="field"><label>Pitch fwd (°)</label><input type="number" data-k="pitchDeg" value="${s.pitchDeg||0}"></div>
+      </div>
+      <div class="row">
         <div class="field"><label>H-FOV (°)</label><input type="number" data-k="hFovDeg" value="${s.hFovDeg}"></div>
         <div class="field"><label>V-FOV (°)</label><input type="number" data-k="vFovDeg" value="${s.vFovDeg}"></div>
       </div>
@@ -1770,7 +1790,7 @@ function renderSensorList(){
 function addObstacle(){
   seq.o=Math.max(seq.o, project.obstacles.length);
   const def=OBSTACLE_PRESETS["Pole"];
-  const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:1000,
+  const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:0,
     width:def.width,depth:def.depth,height:def.height};
   project.obstacles.push(o); renderObstacleList(); refreshObstacleSelect(); render();
 }
@@ -1787,9 +1807,9 @@ function renderObstacleList(){
       <div class="field"><label>Type</label><select data-k="type">${
         OBSTACLE_TYPES.map(t=>`<option ${t===o.type?"selected":""}>${t}</option>`).join("")}</select></div>
       <div class="row">
-        <div class="field"><label>X</label><input type="number" data-k="x" value="${o.x}"></div>
-        <div class="field"><label>Y</label><input type="number" data-k="y" value="${o.y}"></div>
-        <div class="field"><label>Z</label><input type="number" data-k="z" value="${o.z}"></div>
+        <div class="field"><label>X fore-aft (mm)</label><input type="number" data-k="x" value="${o.x}"></div>
+        <div class="field"><label>Y lateral (mm)</label><input type="number" data-k="y" value="${o.y}"></div>
+        <div class="field"><label>Z bottom (mm)</label><input type="number" data-k="z" value="${o.z}"></div>
       </div>
       <div class="row">
         <div class="field"><label>Width (Y mm)</label><input type="number" data-k="width" value="${o.width}"></div>
@@ -1897,6 +1917,76 @@ function measuredFovHull(){
   return pts.length>=3 ? convexHull(pts) : null;
 }
 function recomputeAll(){ overlapCache=null; project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+
+/* ---- Proximity distances ---- */
+function obsAABB(o){
+  const hw=(o.width||60)/2, hd=(o.depth||200)/2;
+  return { x1:o.x-hd, x2:o.x+hd, y1:o.y-hw, y2:o.y+hw, z1:o.z, z2:o.z+(o.height||1000) };
+}
+function clampBox(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+// Sensor world position at current door angle.
+function sensorWorldPos(s,openDeg,side){
+  const pose=sensorPoseAtAngle(s,project.door,openDeg,side);
+  return {x:project.door.hingeX+s.posX, y:pose.x, z:pose.y};
+}
+
+// Closest point on obstacle AABB to a 3D point; returns component deltas and total.
+function distPointToObs(pt, o){
+  const b=obsAABB(o);
+  const cx=clampBox(pt.x,b.x1,b.x2), cy=clampBox(pt.y,b.y1,b.y2), cz=clampBox(pt.z,b.z1,b.z2);
+  const dx=pt.x-cx, dy=pt.y-cy, dz=pt.z-cz;
+  return {dx:Math.round(dx), dy:Math.round(dy), dz:Math.round(dz),
+          dist:Math.round(Math.sqrt(dx*dx+dy*dy+dz*dz))};
+}
+
+// Minimum distance from door polygon (Y-Z plane) to obstacle AABB (Y-Z face).
+// Also returns X gap between door fore-aft extent and obstacle fore-aft extent.
+function distDoorToObs(o, openDeg, side){
+  const door=project.door;
+  const poly=doorPolygonAtAngle(door, openDeg, side); // [{x:Y, y:Z}, ...]
+  const b=obsAABB(o);
+  let minYZ=Infinity;
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i], bv=poly[(i+1)%poly.length];
+    for(let t=0;t<=8;t++){
+      const f=t/8;
+      const py=a.x+(bv.x-a.x)*f, pz=a.y+(bv.y-a.y)*f;
+      const cy=clampBox(py,b.y1,b.y2), cz=clampBox(pz,b.z1,b.z2);
+      const d=Math.sqrt((py-cy)**2+(pz-cz)**2);
+      if(d<minYZ) minYZ=d;
+    }
+  }
+  const dX1=door.hingeX-(door.lengthMm||1000)/2, dX2=door.hingeX+(door.lengthMm||1000)/2;
+  const xGap=Math.max(0, Math.max(dX1,b.x1)-Math.min(dX2,b.x2));
+  return {dx:Math.round(xGap), dyz:Math.round(minYZ),
+          dist:Math.round(Math.sqrt(minYZ*minYZ+xGap*xGap))};
+}
+
+function updateDistPanel(){
+  const body=$("distBody"); if(!body||!project) return;
+  const pct=project.view.doorPct;
+  const side=project.project.doorSide;
+  const openDeg=doorAngleForPercent(pct,project.door,side);
+  const rows=[];
+  const fmt=(v,unit="")=>`<td style="text-align:right;padding:2px 6px">${v}${unit}</td>`;
+  for(const s of project.sensors){
+    if(!s.active) continue;
+    const sp=sensorWorldPos(s,openDeg,side);
+    for(const o of project.obstacles){
+      const d=distPointToObs(sp,o);
+      const col=d.dist<(s.stopMm||300)?"var(--red)":d.dist<(s.warningMm||800)?"var(--yellow)":"var(--green)";
+      rows.push(`<tr><td style="padding:2px 6px"><span style="color:${col}">●</span> ${s.id}→${o.id}</td>
+        ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dy)}${fmt(d.dz)}</tr>`);
+    }
+  }
+  for(const o of project.obstacles){
+    const d=distDoorToObs(o,openDeg,side);
+    rows.push(`<tr><td style="padding:2px 6px;color:var(--muted)">Door→${o.id}</td>
+      ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dyz+" Y-Z")}${fmt("—")}</tr>`);
+  }
+  body.innerHTML=rows.join("") || `<tr><td colspan="5" style="padding:4px 6px;color:var(--muted)">No sensors or obstacles</td></tr>`;
+}
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
 
 /* ---- Phase 3: CSV data import (§19) + repeatability (§16) ---- */
