@@ -382,6 +382,11 @@ a.dl{color:var(--accent)}
         <button id="gridBtn200" onclick="setGridCell(200)">20×20 cm</button>
       </div>
       <div class="grp">
+        <label>Heatmap</label>
+        <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
+        <button onclick="clearHeatmap()">Clear</button>
+      </div>
+      <div class="grp">
         <label>Door position</label>
         <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
         <span id="doorPctVal" class="mini">0%</span>
@@ -476,6 +481,7 @@ const OBSTACLE_PRESETS = {
 
 let project, seq = {s:0,o:0,t:0};
 let gridCellMm = 100; // canvas grid cell size in mm (100 = 10 cm default)
+let heatmapData = {}; // keyed by plane: "front" / "top" → [{wx,wy,color}]
 
 // Default wing-door front-view (Y-Z) silhouette, door-local, hinge at (0,0).
 // Authored for a LEFT (LH) door hanging down the body side from the roof hinge;
@@ -1079,6 +1085,7 @@ function cssVar(n){return getComputedStyle(document.documentElement).getProperty
 
 function drawGrid(){
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
+  drawHeatmap(); // coloured distance zones (click Heatmap to compute)
   const cell=gridCellMm, major=cell*5;
   const s=curView.zoom;
   const originS=worldToScreen({x:0,y:0});
@@ -1917,6 +1924,96 @@ function measuredFovHull(){
   return pts.length>=3 ? convexHull(pts) : null;
 }
 function recomputeAll(){ overlapCache=null; project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+
+/* ========================= HEATMAP ========================= */
+function _pip(px,py,poly){ // ray-casting point-in-polygon
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>py)!==(yj>py))&&px<(xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+  }
+  return inside;
+}
+function _heatCol(dist, stopMm, warnMm, maxR){
+  if(dist>maxR) return null;
+  if(dist<=stopMm){
+    const t=dist/Math.max(1,stopMm);
+    return `rgba(220,${Math.round(20+t*40)},20,0.45)`; // red
+  }
+  if(dist<=warnMm){
+    const t=(dist-stopMm)/Math.max(1,warnMm-stopMm);
+    return `rgba(220,${Math.round(60+t*175)},20,0.45)`; // orange → yellow
+  }
+  const t=(dist-warnMm)/Math.max(1,maxR-warnMm);
+  return `rgba(${Math.round(180*(1-t))},${Math.round(185+t*50)},${Math.round(20+t*140)},0.45)`; // green → teal
+}
+function _computeHeatPlane(plane){
+  const pct=project.view.doorPct, side=project.project.doorSide;
+  const openDeg=doorAngleForPercent(pct,project.door,side);
+  const step=gridCellMm;
+  const infos=[];
+  for(const s of project.sensors){
+    if(!s.active) continue;
+    const pose=sensorPoseAtAngle(s,project.door,openDeg,side);
+    let poly,sp,sc=1;
+    if(plane==="top"){
+      sc=topForeshorten(s,project.door,openDeg,side)||1;
+      poly=sensorFovTop(s,project.door,openDeg,side,48);
+      sp={x:project.door.hingeX+s.posX, y:pose.x};
+    } else {
+      poly=fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm,48);
+      sp={x:pose.x, y:pose.y};
+    }
+    infos.push({poly,sp,stopMm:s.stopMm*sc,warnMm:s.warningMm*sc,maxR:s.maxRangeMm*sc});
+  }
+  if(!infos.length) return [];
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const{sp,maxR}of infos){
+    x0=Math.min(x0,sp.x-maxR); x1=Math.max(x1,sp.x+maxR);
+    y0=Math.min(y0,sp.y-maxR); y1=Math.max(y1,sp.y+maxR);
+  }
+  x0=Math.floor(x0/step)*step; x1=Math.ceil(x1/step)*step;
+  y0=Math.floor(y0/step)*step; y1=Math.ceil(y1/step)*step;
+  const cells=[];
+  for(let wx=x0;wx<=x1;wx+=step){
+    for(let wy=y0;wy<=y1;wy+=step){
+      for(const{poly,sp,stopMm,warnMm,maxR}of infos){
+        if(!_pip(wx,wy,poly)) continue;
+        const d=Math.sqrt((wx-sp.x)**2+(wy-sp.y)**2);
+        const col=_heatCol(d,stopMm,warnMm,maxR);
+        if(col){ cells.push({wx,wy,color:col}); break; }
+      }
+    }
+  }
+  return cells;
+}
+function computeHeatmap(){
+  if(!project) return;
+  heatmapData={
+    front: _computeHeatPlane("front"),
+    top:   _computeHeatPlane("top")
+  };
+  render();
+}
+function clearHeatmap(){ heatmapData={}; render(); }
+function drawHeatmap(){
+  const cells=heatmapData[curPlane];
+  if(!cells||!cells.length) return;
+  const cellPx=gridCellMm*curView.zoom;
+  for(const c of cells){
+    const q=worldToScreen({x:c.wx,y:c.wy});
+    ctx.fillStyle=c.color;
+    ctx.fillRect(q.x-cellPx/2,q.y-cellPx/2,cellPx,cellPx);
+  }
+  // colour legend in top-right corner
+  const leg=[["rgba(220,40,20,0.7)","Stop zone"],["rgba(220,200,20,0.7)","Warning"],["rgba(50,200,100,0.7)","Detection"]];
+  const lx=W-130, ly=14;
+  leg.forEach(([col,lbl],i)=>{
+    ctx.fillStyle=col; ctx.fillRect(lx,ly+i*16,12,12);
+    ctx.fillStyle=cssVar("--ink"); ctx.font="10px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(lbl, lx+16, ly+i*16+10);
+  });
+}
 
 /* ---- Proximity distances ---- */
 function obsAABB(o){
