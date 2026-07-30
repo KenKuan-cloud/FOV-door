@@ -1310,6 +1310,42 @@ function drawTestPoints(){
       ctx.beginPath(); ctx.arc(q.x,q.y,8,0,7); ctx.stroke(); }
   }
 }
+function drawProximityLines(){
+  if(!project||!project.sensors||!project.obstacles) return;
+  const side=project.project.doorSide;
+  const openDeg=doorAngleForPercent(project.view.doorPct,project.door,side);
+  for(const s of project.sensors){
+    if(!s.active) continue;
+    const sw=sensorWorldPos(s,openDeg,side);
+    const sp=worldToScreen(toPlane(sw));
+    for(const o of project.obstacles){
+      const b=obsAABB(o);
+      const cx=clampBox(sw.x,b.x1,b.x2);
+      const cy=clampBox(sw.y,b.y1,b.y2);
+      const cz=clampBox(sw.z,b.z1,b.z2);
+      const dx=sw.x-cx, dy=sw.y-cy, dz=sw.z-cz;
+      const dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      const col=dist<=(s.stopMm||300)?"rgba(220,50,50,0.9)":
+                dist<=(s.warningMm||800)?"rgba(230,200,0,0.9)":
+                "rgba(30,185,90,0.9)";
+      const ep=worldToScreen(toPlane({x:cx,y:cy,z:cz}));
+      ctx.save();
+      ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+      ctx.beginPath(); ctx.moveTo(sp.x,sp.y); ctx.lineTo(ep.x,ep.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle=col;
+      ctx.beginPath(); ctx.arc(ep.x,ep.y,4,0,Math.PI*2); ctx.fill();
+      const mx=(sp.x+ep.x)/2, my=(sp.y+ep.y)/2;
+      const label=`${s.id}→${o.id}: ${Math.round(dist)}mm`;
+      ctx.font="11px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      const tw=ctx.measureText(label).width;
+      ctx.fillStyle="rgba(13,17,23,0.75)";
+      ctx.fillRect(mx-tw/2-3,my-8,tw+6,16);
+      ctx.fillStyle=col; ctx.fillText(label,mx,my);
+      ctx.restore();
+    }
+  }
+}
 // Dispatch: draw the active view (front/top) or both panes (split).
 function render(){
   if(!project) return;
@@ -1374,6 +1410,7 @@ function drawScene(){
   drawCompareOverlay();
   drawVelocityVectors();
   drawObstacles();
+  drawProximityLines();
   drawTestPoints();
 }
 
@@ -1936,16 +1973,9 @@ function _pip(px,py,poly){ // ray-casting point-in-polygon
 }
 function _heatCol(dist, stopMm, warnMm, maxR){
   if(dist>maxR) return null;
-  if(dist<=stopMm){
-    const t=dist/Math.max(1,stopMm);
-    return `rgba(220,${Math.round(20+t*40)},20,0.45)`; // red
-  }
-  if(dist<=warnMm){
-    const t=(dist-stopMm)/Math.max(1,warnMm-stopMm);
-    return `rgba(220,${Math.round(60+t*175)},20,0.45)`; // orange → yellow
-  }
-  const t=(dist-warnMm)/Math.max(1,maxR-warnMm);
-  return `rgba(${Math.round(180*(1-t))},${Math.round(185+t*50)},${Math.round(20+t*140)},0.45)`; // green → teal
+  if(dist<=stopMm) return "rgba(220,50,50,0.40)";   // red   — stop zone
+  if(dist<=warnMm) return "rgba(230,200,0,0.40)";   // yellow — warning zone
+  return "rgba(30,185,90,0.40)";                     // green  — detection zone
 }
 function _computeHeatPlane(plane){
   const pct=project.view.doorPct, side=project.project.doorSide;
@@ -2006,7 +2036,7 @@ function drawHeatmap(){
     ctx.fillRect(q.x-cellPx/2,q.y-cellPx/2,cellPx,cellPx);
   }
   // colour legend in top-right corner
-  const leg=[["rgba(220,40,20,0.7)","Stop zone"],["rgba(220,200,20,0.7)","Warning"],["rgba(50,200,100,0.7)","Detection"]];
+  const leg=[["rgba(220,50,50,0.8)","Stop zone"],["rgba(230,200,0,0.8)","Warning"],["rgba(30,185,90,0.8)","Detection"]];
   const lx=W-130, ly=14;
   leg.forEach(([col,lbl],i)=>{
     ctx.fillStyle=col; ctx.fillRect(lx,ly+i*16,12,12);
