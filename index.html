@@ -449,6 +449,26 @@ const OBSTACLE_TYPES = ["Flat wall","Pole","Cylinder","Child-size object",
 const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
   "Capacitive proximity","Generic distance"];
 
+// Per-type default dimensions (mm) and canvas draw shape.
+// shape: "rect" | "circle" | "hbar" | "diamond"
+const OBSTACLE_PRESETS = {
+  "Flat wall":         {width:2000, height:2500, shape:"rect"},
+  "Pole":              {width:80,   height:2000, shape:"circle"},
+  "Cylinder":          {width:200,  height:1200, shape:"circle"},
+  "Child-size object": {width:300,  height:900,  shape:"rect"},
+  "Adult-size object": {width:600,  height:1800, shape:"rect"},
+  "Vehicle":           {width:1800, height:1500, shape:"rect"},
+  "Garage wall":       {width:200,  height:2800, shape:"rect"},
+  "Garage ceiling":    {width:3000, height:200,  shape:"hbar"},
+  "Hanging object":    {width:400,  height:600,  shape:"diamond"},
+  "Shopping cart":     {width:600,  height:1100, shape:"rect"},
+  "Bicycle":           {width:600,  height:1200, shape:"rect"},
+  "Low concrete block":{width:400,  height:200,  shape:"rect"},
+  "Narrow metal pole": {width:30,   height:2000, shape:"circle"},
+  "Soft object":       {width:400,  height:1000, shape:"rect"},
+  "Custom obstacle":   {width:200,  height:1000, shape:"rect"},
+};
+
 let project, seq = {s:0,o:0,t:0};
 let gridCellMm = 100; // canvas grid cell size in mm (100 = 10 cm default)
 
@@ -1182,12 +1202,41 @@ function drawSensor(s,openDeg,side){
   ctx.fillText(s.id, p.x+7, p.y-7);
 }
 function drawObstacles(){
+  const s=curView.zoom;
   for(const o of project.obstacles){
-    const q=worldToScreen(toPlane({x:o.x,y:o.y,z:o.z}));
-    ctx.fillStyle=cssVar("--orange");
-    ctx.fillRect(q.x-5,q.y-5,10,10);
-    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
-    ctx.fillText(o.id, q.x+8, q.y+4);
+    const ctr=worldToScreen(toPlane({x:o.x,y:o.y,z:o.z}));
+    const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
+    const shape=preset.shape;
+    // half-extents in screen pixels (minimum 4 px so tiny objects stay visible)
+    const hw=Math.max(4,(o.width||60)/2*s);
+    const hh=Math.max(4,(o.height||1000)/2*s);
+    ctx.fillStyle="rgba(255,152,0,.25)";
+    ctx.strokeStyle=cssVar("--orange"); ctx.lineWidth=1.5;
+    if(shape==="circle"){
+      ctx.beginPath(); ctx.arc(ctr.x,ctr.y,hw,0,Math.PI*2);
+      ctx.fill(); ctx.stroke();
+      if(curPlane!=="top"){ // height bar in front/3D views
+        ctx.beginPath();
+        ctx.moveTo(ctr.x,ctr.y-hh); ctx.lineTo(ctr.x,ctr.y+hh);
+        ctx.stroke();
+      }
+    } else if(shape==="hbar"){
+      ctx.fillRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
+      ctx.strokeRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
+    } else if(shape==="diamond"){
+      ctx.beginPath();
+      ctx.moveTo(ctr.x,      ctr.y-hh);
+      ctx.lineTo(ctr.x+hw,   ctr.y);
+      ctx.lineTo(ctr.x,      ctr.y+hh);
+      ctx.lineTo(ctr.x-hw,   ctr.y);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    } else { // rect (default)
+      ctx.fillRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
+      ctx.strokeRect(ctr.x-hw, ctr.y-hh, hw*2, hh*2);
+    }
+    ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(o.id+" ("+o.type+")", ctr.x+hw+4, ctr.y);
   }
 }
 function drawTestPoints(){
@@ -1643,7 +1692,9 @@ function renderSensorList(){
 // ---- Obstacles ----
 function addObstacle(){
   seq.o=Math.max(seq.o, project.obstacles.length);
-  const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:1000,width:60,height:1000};
+  const def=OBSTACLE_PRESETS["Pole"];
+  const o={id:"O"+(++seq.o),type:"Pole",x:1000,y:500,z:1000,
+    width:def.width,height:def.height};
   project.obstacles.push(o); renderObstacleList(); refreshObstacleSelect(); render();
 }
 function removeObstacle(id){
@@ -1671,6 +1722,15 @@ function renderObstacleList(){
       inp.addEventListener("input",()=>{
         const k=inp.dataset.k;
         o[k]= inp.type==="number"?parseFloat(inp.value)||0:inp.value;
+        if(k==="type"){
+          // apply preset defaults when type changes
+          const preset=OBSTACLE_PRESETS[o.type];
+          if(preset){
+            o.width=preset.width; o.height=preset.height;
+            d.querySelector("[data-k=width]").value=preset.width;
+            d.querySelector("[data-k=height]").value=preset.height;
+          }
+        }
         refreshObstacleSelect(); render();
       });
     });
