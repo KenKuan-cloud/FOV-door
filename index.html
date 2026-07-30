@@ -401,6 +401,8 @@ a.dl{color:var(--accent)}
         <label><input type="checkbox" id="showGhost" checked> Swept FOV (feathers)</label>
         <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
         <label><input type="checkbox" id="clickAdd"> Add point on click</label>
+        <label><input type="checkbox" id="moveObs"> Move obstacle</label>
+        <select id="moveObsSel" style="font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 5px"></select>
       </div>
       <div class="grp">
         <button onclick="resetView()">Reset view</button>
@@ -442,10 +444,9 @@ a.dl{color:var(--accent)}
 
 <script>
 /* ====================== 2. STATE MODEL ====================== */
-const OBSTACLE_TYPES = ["Flat wall","Pole","Cylinder","Child-size object",
-  "Adult-size object","Vehicle","Garage wall","Garage ceiling","Hanging object",
-  "Shopping cart","Bicycle","Low concrete block","Narrow metal pole",
-  "Soft object","Custom obstacle"];
+const OBSTACLE_TYPES = ["Flat wall","Pole","Adult-size object",
+  "Garage wall","Garage ceiling","Hanging object",
+  "Low concrete block","Soft object","Custom obstacle"];
 const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
   "Capacitive proximity","Generic distance"];
 
@@ -454,17 +455,11 @@ const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
 const OBSTACLE_PRESETS = {
   "Flat wall":         {width:2000, height:2500, shape:"rect"},
   "Pole":              {width:80,   height:2000, shape:"circle"},
-  "Cylinder":          {width:200,  height:1200, shape:"circle"},
-  "Child-size object": {width:300,  height:900,  shape:"rect"},
   "Adult-size object": {width:600,  height:1800, shape:"rect"},
-  "Vehicle":           {width:1800, height:1500, shape:"rect"},
   "Garage wall":       {width:200,  height:2800, shape:"rect"},
   "Garage ceiling":    {width:3000, height:200,  shape:"hbar"},
   "Hanging object":    {width:400,  height:600,  shape:"diamond"},
-  "Shopping cart":     {width:600,  height:1100, shape:"rect"},
-  "Bicycle":           {width:600,  height:1200, shape:"rect"},
   "Low concrete block":{width:400,  height:200,  shape:"rect"},
-  "Narrow metal pole": {width:30,   height:2000, shape:"circle"},
   "Soft object":       {width:400,  height:1000, shape:"rect"},
   "Custom obstacle":   {width:200,  height:1000, shape:"rect"},
 };
@@ -1237,6 +1232,24 @@ function drawObstacles(){
     }
     ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif"; ctx.textAlign="left";
     ctx.fillText(o.id+" ("+o.type+")", ctr.x+hw+4, ctr.y);
+    // highlight ring when this obstacle is selected in Move mode
+    const isMoveSelected=$("moveObs")?.checked && $("moveObsSel")?.value===o.id;
+    if(isMoveSelected){
+      ctx.strokeStyle="#fff"; ctx.lineWidth=2.5;
+      const pad=6;
+      if(shape==="circle"){
+        ctx.beginPath(); ctx.arc(ctr.x,ctr.y,hw+pad,0,Math.PI*2); ctx.stroke();
+      } else if(shape==="diamond"){
+        ctx.beginPath();
+        ctx.moveTo(ctr.x,      ctr.y-(hh+pad));
+        ctx.lineTo(ctr.x+(hw+pad), ctr.y);
+        ctx.lineTo(ctr.x,      ctr.y+(hh+pad));
+        ctx.lineTo(ctr.x-(hw+pad), ctr.y);
+        ctx.closePath(); ctx.stroke();
+      } else {
+        ctx.strokeRect(ctr.x-(hw+pad), ctr.y-(hh+pad), (hw+pad)*2, (hh+pad)*2);
+      }
+    }
   }
 }
 function drawTestPoints(){
@@ -1784,6 +1797,13 @@ function refreshObstacleSelect(){
   const sel=$("tp_obs"); const cur=sel.value;
   sel.innerHTML=project.obstacles.map(o=>`<option value="${o.id}">${o.id} — ${o.type}</option>`).join("");
   if(cur) sel.value=cur;
+  refreshMoveObsSelect();
+}
+function refreshMoveObsSelect(){
+  const sel=$("moveObsSel"); if(!sel) return;
+  const cur=sel.value;
+  sel.innerHTML=project.obstacles.map(o=>`<option value="${o.id}">${o.id} — ${o.type}</option>`).join("");
+  if(project.obstacles.find(o=>o.id===cur)) sel.value=cur;
 }
 
 /* ---- Test points ---- */
@@ -2304,6 +2324,21 @@ function onCanvasDown(canvas,e){
       addTestPoint(Math.round(w.x), Math.round(w.y), parseFloat($("tp_z").value)||0, $("tp_obs").value);
     else // horiz=Y, vert=Z; X from field
       addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
+    return;
+  }
+  if($("moveObs") && $("moveObs").checked){
+    const obsId=$("moveObsSel").value;
+    const o=project.obstacles.find(x=>x.id===obsId);
+    if(o){
+      const r=canvas.getBoundingClientRect();
+      W=r.width; H=r.height; curView=info.view; curPlane=info.plane;
+      const w=screenToWorld(e.clientX-r.left,e.clientY-r.top);
+      // snap world coords to nearest grid cell centre
+      const snap=v=>Math.round(v/gridCellMm)*gridCellMm;
+      if(info.plane==="top"){ o.x=snap(w.x); o.y=snap(w.y); }
+      else { o.y=snap(w.x); o.z=snap(w.y); } // front view: horiz=Y, vert=Z
+      renderObstacleList(); refreshMoveObsSelect(); render();
+    }
     return;
   }
   drag={x:e.clientX,y:e.clientY,view:info.view,px:info.view.panX,py:info.view.panY};
