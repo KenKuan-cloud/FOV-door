@@ -376,6 +376,12 @@ a.dl{color:var(--accent)}
         </span>
       </div>
       <div class="grp">
+        <label>Grid cell</label>
+        <button id="gridBtn100" class="primary" onclick="setGridCell(100)">10×10 cm</button>
+        <button id="gridBtn50" onclick="setGridCell(50)">5×5 cm</button>
+        <button id="gridBtn200" onclick="setGridCell(200)">20×20 cm</button>
+      </div>
+      <div class="grp">
         <label>Door position</label>
         <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
         <span id="doorPctVal" class="mini">0%</span>
@@ -444,6 +450,7 @@ const SENSOR_TYPES = ["Ultrasonic","Short-range mmWave radar","Time-of-flight",
   "Capacitive proximity","Generic distance"];
 
 let project, seq = {s:0,o:0,t:0};
+let gridCellMm = 100; // canvas grid cell size in mm (100 = 10 cm default)
 
 // Default wing-door front-view (Y-Z) silhouette, door-local, hinge at (0,0).
 // Authored for a LEFT (LH) door hanging down the body side from the roof hinge;
@@ -1047,28 +1054,68 @@ function cssVar(n){return getComputedStyle(document.documentElement).getProperty
 
 function drawGrid(){
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
-  const step=500, s=curView.zoom; // 500 mm grid
-  ctx.strokeStyle="#161b22"; ctx.lineWidth=1;
+  const cell=gridCellMm, major=cell*5;
+  const s=curView.zoom;
   const originS=worldToScreen({x:0,y:0});
-  const spanY=W/s, spanZ=H/s; // horizontal span (Y), vertical span (Z)
+  const padY=cell*4, padZ=cell*4;
+  const spanY=W/s+padY, spanZ=H/s+padZ;
+  const minX=-Math.ceil(spanY/cell)*cell, maxX=Math.ceil(spanY/cell)*cell;
+  const minZ=-Math.ceil(spanZ/cell)*cell, maxZ=Math.ceil(spanZ/cell)*cell;
+  const cellPx=cell*s; // screen pixels per cell
+
+  // minor gridlines — skip when too dense
+  if(cellPx>=3){
+    ctx.strokeStyle="#161b22"; ctx.lineWidth=0.5;
+    ctx.beginPath();
+    for(let gy=minX; gy<=maxX; gy+=cell){
+      const a=worldToScreen({x:gy,y:minZ}), b=worldToScreen({x:gy,y:maxZ});
+      ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+    }
+    for(let gz=minZ; gz<=maxZ; gz+=cell){
+      const a=worldToScreen({x:minX,y:gz}), b=worldToScreen({x:maxX,y:gz});
+      ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+    }
+    ctx.stroke();
+  }
+
+  // major gridlines (every 5 cells)
+  ctx.strokeStyle="#2b3644"; ctx.lineWidth=1;
   ctx.beginPath();
-  // vertical grid lines (constant Y)
-  for(let gy=-Math.ceil(spanY/step)*step; gy<=spanY; gy+=step){
-    const a=worldToScreen({x:gy,y:-spanZ}), b=worldToScreen({x:gy,y:spanZ});
+  for(let gy=-Math.ceil(spanY/major)*major; gy<=Math.ceil(spanY/major)*major; gy+=major){
+    const a=worldToScreen({x:gy,y:minZ}), b=worldToScreen({x:gy,y:maxZ});
     ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
   }
-  // horizontal grid lines (constant Z)
-  for(let gz=-Math.ceil(spanZ/step)*step; gz<=spanZ; gz+=step){
-    const a=worldToScreen({x:-spanY,y:gz}), b=worldToScreen({x:spanY,y:gz});
+  for(let gz=-Math.ceil(spanZ/major)*major; gz<=Math.ceil(spanZ/major)*major; gz+=major){
+    const a=worldToScreen({x:minX,y:gz}), b=worldToScreen({x:maxX,y:gz});
     ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
   }
   ctx.stroke();
+
+  // labels at major gridlines
+  ctx.fillStyle=cssVar("--muted"); ctx.font="10px sans-serif";
+  ctx.textAlign="center";
+  for(let gy=-Math.ceil(spanY/major)*major; gy<=Math.ceil(spanY/major)*major; gy+=major){
+    if(gy===0) continue;
+    const q=worldToScreen({x:gy,y:0});
+    if(q.x<2||q.x>W-2) continue;
+    const lbl=(Math.abs(gy)>=1000?(gy/1000).toFixed(gy%1000===0?0:1)+"m":(gy)+"mm");
+    ctx.fillText(lbl, q.x, Math.min(H-4, Math.max(14, q.y-4)));
+  }
+  ctx.textAlign="right";
+  for(let gz=-Math.ceil(spanZ/major)*major; gz<=Math.ceil(spanZ/major)*major; gz+=major){
+    if(gz===0) continue;
+    const q=worldToScreen({x:0,y:gz});
+    if(q.y<10||q.y>H-2) continue;
+    const lbl=(Math.abs(gz)>=1000?(gz/1000).toFixed(gz%1000===0?0:1)+"m":(gz)+"mm");
+    ctx.fillText(lbl, 44, q.y+3);
+  }
+
   const top=curPlane==="top";
   if(!top){ // ground line at Z=0 (front view only)
     ctx.strokeStyle="#3a4757"; ctx.lineWidth=1.5; ctx.beginPath();
-    const g0=worldToScreen({x:-spanY,y:0}), g1=worldToScreen({x:spanY,y:0});
+    const g0=worldToScreen({x:minX,y:0}), g1=worldToScreen({x:maxX,y:0});
     ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
-    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+    ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif"; ctx.textAlign="left";
     ctx.fillText("ground  Z=0", g1.x-90, g1.y-5);
   }
   // axes
@@ -1077,10 +1124,18 @@ function drawGrid(){
   const av=worldToScreen({x:0,y:2500}), av0=worldToScreen({x:0,y:-200});
   ctx.moveTo(ah0.x,ah0.y); ctx.lineTo(ah.x,ah.y);
   ctx.moveTo(av0.x,av0.y); ctx.lineTo(av.x,av.y); ctx.stroke();
-  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
+  ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif"; ctx.textAlign="left";
   ctx.fillText(top?"+X fwd":"+Y", ah.x-6, ah.y-6);
   ctx.fillText(top?"+Y left":"+Z up", av.x+6, av.y+4);
   ctx.beginPath(); ctx.arc(originS.x,originS.y,3,0,7); ctx.fill();
+}
+function setGridCell(mm){
+  gridCellMm=mm;
+  [100,50,200].forEach(v=>{
+    const b=document.getElementById("gridBtn"+v);
+    if(b){ b.classList.toggle("primary",v===mm); }
+  });
+  render();
 }
 function fillPoly(poly,fill,stroke,lw){
   polyPath(poly);
