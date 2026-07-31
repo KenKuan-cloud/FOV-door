@@ -2532,10 +2532,13 @@ function updateDoorPctLabel(){
   $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
 }
 function toggleResultsTable(){
-  const wrap=$("tpTableWrap"), btn=$("tpToggleBtn"); if(!wrap||!btn) return;
+  const wrap=$("tpTableWrap"), btn=$("tpToggleBtn"), sect=$("resultsSection"); if(!wrap||!btn) return;
   const hidden=wrap.style.display==="none";
   wrap.style.display=hidden?"":"none";
+  // collapse the whole panel to just its header so the canvas area grows
+  if(sect) sect.style.height=hidden?"":"auto";
   btn.textContent=hidden?"Hide":"Show";
+  render(); // refit canvas to the reclaimed space
 }
 function toggleProxLines(){
   const cb=$("showProxLines"); if(!cb) return;
