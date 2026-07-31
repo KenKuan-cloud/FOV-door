@@ -164,18 +164,17 @@ a.dl{color:var(--accent)}
           <textarea id="d_profile" rows="8" spellcheck="false"
             style="font-family:monospace;font-size:11px"></textarea></div>
         <button onclick="applyProfile()">Apply outline</button>
-        <button onclick="resetProfile()">Reset to wing default</button>
-        <p class="mini" style="color:var(--accent);margin:12px 0 4px">Import outline from CAD (SVG)</p>
-        <div class="field"><label>SVG file</label><input id="d_svg" type="file" accept=".svg,image/svg+xml"></div>
-        <div class="row">
-          <div class="field"><label>Scale</label>
-            <select id="d_svgscale"><option value="fit">Fit to door height</option>
-              <option value="asis">As-is (mm)</option></select></div>
-          <div class="field" style="display:flex;align-items:flex-end">
-            <label class="mini"><input type="checkbox" id="d_svgflip"> Flip horizontally</label></div>
+        <div class="row" style="margin-top:10px;align-items:flex-end">
+          <div class="field"><label>Load preset</label>
+            <select id="d_presetSel" style="background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 5px;font-size:12px">
+              <option value="">— choose —</option>
+              <option value="wing">Wing door default</option>
+              <option value="p700r">P700 Right door</option>
+              <option value="p700l">P700 Left door</option>
+            </select>
+          </div>
+          <div class="field"><button onclick="loadDoorPreset()">Load</button></div>
         </div>
-        <p class="mini">Imports the largest outline; hinge is placed at its
-          top-center. Points land in the editable box above for fine-tuning.</p>
         <p class="hint">Door positions 0–100% in 10% steps are generated
           automatically (11 positions, criterion&nbsp;4). Use the door slider above
           the canvas to view any position, and enable <b>Swept FOV</b> to see all
@@ -664,49 +663,20 @@ function simplifyClosed(pts, tol){
   const b=simplifyDP(r.slice(far), tol);           // far … last
   return a.concat(b.slice(1));                      // drop shared 'far' vertex
 }
-/* ---- Phase 4: CAD (SVG) door-outline import (§7.2) ---- */
-// Parse an SVG string → the largest closed outline as [{x,y}] (SVG y is down).
-function parseSvgOutline(text){
-  const doc=new DOMParser().parseFromString(text,"image/svg+xml");
-  if(doc.querySelector("parsererror")) throw new Error("Not valid SVG");
-  const shapes=[];
-  const ptsAttr=el=>{
-    const raw=(el.getAttribute("points")||"").trim().split(/[\s,]+/).map(Number);
-    const out=[]; for(let i=0;i+1<raw.length;i+=2) out.push({x:raw[i],y:raw[i+1]});
-    return out;
-  };
-  doc.querySelectorAll("polygon,polyline").forEach(el=>{const p=ptsAttr(el); if(p.length>=3) shapes.push(p);});
-  const paths=doc.querySelectorAll("path");
-  if(paths.length){
-    const NS="http://www.w3.org/2000/svg";
-    const svg=document.createElementNS(NS,"svg");
-    svg.setAttribute("width","0"); svg.setAttribute("height","0");
-    svg.style.position="absolute"; svg.style.left="-9999px"; document.body.appendChild(svg);
-    paths.forEach(pe=>{
-      const path=document.createElementNS(NS,"path");
-      path.setAttribute("d", pe.getAttribute("d")||"");
-      svg.appendChild(path);
-      const len=path.getTotalLength();
-      if(len>0){ const n=200, p=[]; for(let i=0;i<=n;i++){ const q=path.getPointAtLength(len*i/n); p.push({x:q.x,y:q.y}); } shapes.push(p); }
-    });
-    document.body.removeChild(svg);
-  }
-  if(!shapes.length) throw new Error("No <path>/<polygon>/<polyline> found");
-  // largest bounding-box area wins (the door silhouette)
-  const area=p=>{let a=1e9,b=1e9,c=-1e9,d=-1e9;p.forEach(q=>{a=Math.min(a,q.x);b=Math.min(b,q.y);c=Math.max(c,q.x);d=Math.max(d,q.y);});return (c-a)*(d-b);};
-  return shapes.sort((s1,s2)=>area(s2)-area(s1))[0];
-}
-// Normalize raw SVG points → door-local profile [{y,z}] (hinge = top-center at 0,0).
-function normalizeOutline(pts, opts){
-  let up=pts.map(p=>({x:p.x, z:-p.y})); // flip Y (SVG down → Z up)
-  let minx=1e9,maxx=-1e9,minz=1e9,maxz=-1e9;
-  up.forEach(p=>{minx=Math.min(minx,p.x);maxx=Math.max(maxx,p.x);minz=Math.min(minz,p.z);maxz=Math.max(maxz,p.z);});
-  let scale=1;
-  if(opts.fitHeight && (maxz-minz)>0) scale=(project.door.heightMm||1250)/(maxz-minz);
-  const cx=(minx+maxx)/2, flip=opts.flip?-1:1;
-  let prof=up.map(p=>({ y:flip*(p.x-cx)*scale, z:(p.z-maxz)*scale })); // top-center → 0,0
-  prof=simplifyClosed(prof.map(p=>({x:p.y,y:p.z})), opts.tol||8).map(p=>({y:p.x,z:p.y}));
-  return prof;
+/* ---- Door profile presets ---- */
+const DOOR_PROFILE_PRESETS={
+  "wing": null, // resolved at runtime via wingDefaultProfile()
+  "p700r": [[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]],
+  "p700l": [[0,0],[62,7],[599,22],[977,-426],[964,-1139],[799,-1205],[740,-980],[690,-924],[620,-118],[119,-16]],
+};
+function loadDoorPreset(){
+  const key=$("d_presetSel").value; if(!key) return;
+  let pts=DOOR_PROFILE_PRESETS[key]||(DOOR_PROFILE_PRESETS[key]=wingDefaultProfile().map(p=>[p.y,p.z]));
+  if(key==="wing") pts=wingDefaultProfile().map(p=>[p.y,p.z]);
+  const prof=pts.map(([y,z])=>({y,z}));
+  project.door.profile=prof;
+  $("d_profile").value=prof.map(p=>p.y+","+p.z).join("\n");
+  recomputeAll(); render();
 }
 function sweptEnvelopePolygon(door, side){
   let all=[];
@@ -1783,7 +1753,6 @@ function bindDoor(){
     $(id).addEventListener("input",()=>{ project.door[map[id]]=parseFloat($(id).value)||0;
       recomputeAll(); render(); });
   }
-  $("d_svg").addEventListener("change",e=>{ if(e.target.files[0]) importDoorOutline(e.target.files[0]); });
 }
 function loadDoorFields(){
   const d=project.door;
@@ -1806,19 +1775,6 @@ function resetProfile(){
   project.door.profile=wingDefaultProfile();
   $("d_profile").value=project.door.profile.map(p=>p.y+","+p.z).join("\n");
   recomputeAll(); render();
-}
-function importDoorOutline(file){
-  const rd=new FileReader();
-  rd.onload=()=>{ try{
-      const raw=parseSvgOutline(rd.result);
-      const prof=normalizeOutline(raw, {fitHeight:$("d_svgscale").value==="fit",
-        flip:$("d_svgflip").checked, tol:8});
-      if(prof.length<3) throw new Error("Outline has too few points");
-      project.door.profile=prof;
-      $("d_profile").value=prof.map(p=>Math.round(p.y)+","+Math.round(p.z)).join("\n");
-      recomputeAll(); render();
-    }catch(e){ alert("SVG import failed: "+e.message); } };
-  rd.readAsText(file);
 }
 // ---- Sensors ----
 const SENSOR_COLORS=["#4da3ff","#ff7043","#66bb6a","#ffca28","#ab47bc","#26c6da"];
@@ -2787,14 +2743,10 @@ function runSelfTests(){
     return {atHinge, away};
   });
   results.push(["motion ego: hinge=0, away>0", mv.atHinge<1e-6 && mv.away>0]);
-  // CAD import: normalize a 100-unit SVG square (y-down) → top-center at 0,0,
-  // fit to door height; DP collapses a straight run to its endpoints.
-  const sq=[{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}];
-  const no=withProject(defaultProject(), ()=>normalizeOutline(sq,{fitHeight:true,flip:false,tol:8}));
-  const topZ=Math.max(...no.map(p=>p.z)), spanZ=topZ-Math.min(...no.map(p=>p.z));
-  const cy=(Math.min(...no.map(p=>p.y))+Math.max(...no.map(p=>p.y)))/2;
-  results.push(["CAD normalize: top-center@0, fit height",
-    Math.abs(topZ)<1e-6 && Math.abs(cy)<1e-6 && Math.abs(spanZ-1250)<1]);
+  // Door preset: P700 Right door starts at hinge (0,0) and has 10 points.
+  const p700r=DOOR_PROFILE_PRESETS["p700r"].map(([y,z])=>({y,z}));
+  results.push(["P700 right door preset: 10 points, hinge at 0,0",
+    p700r.length===10 && p700r[0].y===0 && p700r[0].z===0]);
   results.push(["simplifyDP collapses straight run",
     simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
   // 3D: door prism has 2 end faces + one per profile edge; FOV frustum has 5 faces.
