@@ -666,12 +666,15 @@ function simplifyClosed(pts, tol){
   return a.concat(b.slice(1));                      // drop shared 'far' vertex
 }
 /* ---- Door profile presets ---- */
+// Profile Y values are always negative (door hangs left of hinge in local coords).
+// side="LH" (mir=1) keeps Y negative → door appears on LEFT of screen (right door, front view).
+// side="RH" (mir=-1) negates Y → door appears on RIGHT of screen (left door, front view).
 const DOOR_PROFILE_PRESETS={
   "wing":  {side:"LH", pts:null},
-  "p700r": {side:"RH", pts:[[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]]},
-  "p700l": {side:"LH", pts:[[0,0],[62,7],[599,22],[977,-426],[964,-1139],[799,-1205],[740,-980],[690,-924],[620,-118],[119,-16]]},
-  "p800r": {side:"RH", pts:[[0,0],[-55,46],[-598,-1],[-970,-523],[-982,-1184],[-855,-1356],[-766,-1198],[-696,-1082],[-566,-91],[-74,-37]]},
-  "p800l": {side:"LH", pts:[[0,0],[55,46],[598,-1],[970,-523],[982,-1184],[855,-1356],[766,-1198],[696,-1082],[566,-91],[74,-37]]},
+  "p700r": {side:"LH", pts:[[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]]},
+  "p700l": {side:"RH", pts:[[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]]},
+  "p800r": {side:"LH", pts:[[0,0],[-55,46],[-598,-1],[-970,-523],[-982,-1184],[-855,-1356],[-766,-1198],[-696,-1082],[-566,-91],[-74,-37]]},
+  "p800l": {side:"RH", pts:[[0,0],[-55,46],[-598,-1],[-970,-523],[-982,-1184],[-855,-1356],[-766,-1198],[-696,-1082],[-566,-91],[-74,-37]]},
 };
 function loadDoorPreset(){
   const key=$("d_presetSel").value; if(!key) return;
@@ -2752,8 +2755,8 @@ function runSelfTests(){
   results.push(["motion ego: hinge=0, away>0", mv.atHinge<1e-6 && mv.away>0]);
   // Door preset: P700 Right door starts at hinge (0,0) and has 10 points.
   const p700r=DOOR_PROFILE_PRESETS["p700r"].pts.map(([y,z])=>({y,z}));
-  results.push(["P700 right door preset: 10 points, hinge at 0,0, side RH",
-    p700r.length===10 && p700r[0].y===0 && p700r[0].z===0 && DOOR_PROFILE_PRESETS["p700r"].side==="RH"]);
+  results.push(["P700 right door preset: 10 points, hinge at 0,0, side LH",
+    p700r.length===10 && p700r[0].y===0 && p700r[0].z===0 && DOOR_PROFILE_PRESETS["p700r"].side==="LH"]);
   results.push(["simplifyDP collapses straight run",
     simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
   // 3D: door prism has 2 end faces + one per profile edge; FOV frustum has 5 faces.
