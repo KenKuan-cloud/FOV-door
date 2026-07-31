@@ -144,7 +144,12 @@ a.dl{color:var(--accent)}
         <h2>Wing-Door Setup</h2>
         <p class="hint"><b>Front view (Y horizontal, Z up).</b> Falcon-/gullwing
           door hinged near the roof; it lifts up-and-out about the hinge in the
-          Y&ndash;Z plane. LH vs RH mirrors the swing direction.</p>
+          Y&ndash;Z plane. LH = left door (right of screen from front); RH = right door (left of screen).</p>
+        <div class="row" style="align-items:center;margin-bottom:6px">
+          <span class="mini" style="margin-right:6px">Door side:</span>
+          <button id="d_sideLH" onclick="setDoorSide('LH')" style="min-width:48px">LH</button>
+          <button id="d_sideRH" onclick="setDoorSide('RH')" style="min-width:48px">RH</button>
+        </div>
         <div class="row">
           <div class="field"><label>Hinge Y (mm)</label><input id="d_hy" type="number"></div>
           <div class="field"><label>Hinge Z / roof (mm)</label><input id="d_hz" type="number"></div>
@@ -686,6 +691,7 @@ function loadDoorPreset(){
   // set matching door side so rotation direction is correct
   project.project.doorSide=preset.side;
   const sel=$("p_side"); if(sel) sel.value=preset.side;
+  syncDoorSideToggle();
   recomputeAll(); render();
 }
 function sweptEnvelopePolygon(door, side){
@@ -1746,14 +1752,29 @@ function bindProject(){
     p_side:"doorSide",p_by:"preparedBy",p_date:"testDate",p_notes:"notes"};
   for(const id in map){
     $(id).addEventListener("input",()=>{ project.project[map[id]]=$(id).value;
-      if(id==="p_side") recomputeAll(); render(); });
+      if(id==="p_side"){ syncDoorSideToggle(); recomputeAll(); } render(); });
   }
+}
+function setDoorSide(side){
+  project.project.doorSide=side;
+  const pSel=$("p_side"); if(pSel) pSel.value=side;
+  const lh=$("d_sideLH"), rh=$("d_sideRH");
+  if(lh) lh.classList.toggle("primary", side==="LH");
+  if(rh) rh.classList.toggle("primary", side==="RH");
+  recomputeAll(); render();
+}
+function syncDoorSideToggle(){
+  const side=project.project.doorSide;
+  const lh=$("d_sideLH"), rh=$("d_sideRH");
+  if(lh) lh.classList.toggle("primary", side==="LH");
+  if(rh) rh.classList.toggle("primary", side==="RH");
 }
 function loadProjectFields(){
   const p=project.project;
   $("p_name").value=p.name; $("p_vehicle").value=p.vehicleModel;
   $("p_customer").value=p.customer; $("p_side").value=p.doorSide;
   $("p_by").value=p.preparedBy; $("p_date").value=p.testDate; $("p_notes").value=p.notes;
+  syncDoorSideToggle();
 }
 // ---- Door fields ----
 function bindDoor(){
