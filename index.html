@@ -171,6 +171,8 @@ a.dl{color:var(--accent)}
               <option value="wing">Wing door default</option>
               <option value="p700r">P700 Right door</option>
               <option value="p700l">P700 Left door</option>
+              <option value="p800r">P800 Right door</option>
+              <option value="p800l">P800 Left door</option>
             </select>
           </div>
           <div class="field"><button onclick="loadDoorPreset()">Load</button></div>
@@ -665,17 +667,22 @@ function simplifyClosed(pts, tol){
 }
 /* ---- Door profile presets ---- */
 const DOOR_PROFILE_PRESETS={
-  "wing": null, // resolved at runtime via wingDefaultProfile()
-  "p700r": [[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]],
-  "p700l": [[0,0],[62,7],[599,22],[977,-426],[964,-1139],[799,-1205],[740,-980],[690,-924],[620,-118],[119,-16]],
+  "wing":  {side:"LH", pts:null},
+  "p700r": {side:"RH", pts:[[0,0],[-62,7],[-599,22],[-977,-426],[-964,-1139],[-799,-1205],[-740,-980],[-690,-924],[-620,-118],[-119,-16]]},
+  "p700l": {side:"LH", pts:[[0,0],[62,7],[599,22],[977,-426],[964,-1139],[799,-1205],[740,-980],[690,-924],[620,-118],[119,-16]]},
+  "p800r": {side:"RH", pts:[[0,0],[-55,46],[-598,-1],[-970,-523],[-982,-1184],[-855,-1356],[-766,-1198],[-696,-1082],[-566,-91],[-74,-37]]},
+  "p800l": {side:"LH", pts:[[0,0],[55,46],[598,-1],[970,-523],[982,-1184],[855,-1356],[766,-1198],[696,-1082],[566,-91],[74,-37]]},
 };
 function loadDoorPreset(){
   const key=$("d_presetSel").value; if(!key) return;
-  let pts=DOOR_PROFILE_PRESETS[key]||(DOOR_PROFILE_PRESETS[key]=wingDefaultProfile().map(p=>[p.y,p.z]));
-  if(key==="wing") pts=wingDefaultProfile().map(p=>[p.y,p.z]);
-  const prof=pts.map(([y,z])=>({y,z}));
+  const preset=DOOR_PROFILE_PRESETS[key];
+  const rawPts=preset.pts || wingDefaultProfile().map(p=>[p.y,p.z]);
+  const prof=rawPts.map(([y,z])=>({y,z}));
   project.door.profile=prof;
   $("d_profile").value=prof.map(p=>p.y+","+p.z).join("\n");
+  // set matching door side so rotation direction is correct
+  project.project.doorSide=preset.side;
+  const sel=$("p_side"); if(sel) sel.value=preset.side;
   recomputeAll(); render();
 }
 function sweptEnvelopePolygon(door, side){
@@ -2744,9 +2751,9 @@ function runSelfTests(){
   });
   results.push(["motion ego: hinge=0, away>0", mv.atHinge<1e-6 && mv.away>0]);
   // Door preset: P700 Right door starts at hinge (0,0) and has 10 points.
-  const p700r=DOOR_PROFILE_PRESETS["p700r"].map(([y,z])=>({y,z}));
-  results.push(["P700 right door preset: 10 points, hinge at 0,0",
-    p700r.length===10 && p700r[0].y===0 && p700r[0].z===0]);
+  const p700r=DOOR_PROFILE_PRESETS["p700r"].pts.map(([y,z])=>({y,z}));
+  results.push(["P700 right door preset: 10 points, hinge at 0,0, side RH",
+    p700r.length===10 && p700r[0].y===0 && p700r[0].z===0 && DOOR_PROFILE_PRESETS["p700r"].side==="RH"]);
   results.push(["simplifyDP collapses straight run",
     simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
   // 3D: door prism has 2 end faces + one per profile edge; FOV frustum has 5 faces.
