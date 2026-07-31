@@ -447,7 +447,12 @@ a.dl{color:var(--accent)}
         <div class="legOv" style="display:none"><span class="sw" style="background:rgba(248,81,73,.7)"></span>Sensor gap</div>
       </div>
     </div>
-    <div class="results">
+    <div class="results" id="resultsSection">
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--line);background:var(--panel2)">
+        <button id="tpToggleBtn" onclick="toggleResultsTable()" style="font-size:10px;padding:2px 8px">Hide</button>
+        <span style="font-size:11px;color:var(--muted)">Test points</span>
+      </div>
+      <div id="tpTableWrap">
       <table id="tpTable">
         <thead><tr>
           <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
@@ -456,6 +461,7 @@ a.dl{color:var(--accent)}
         </tr></thead>
         <tbody id="tpBody"></tbody>
       </table>
+      </div><!-- /tpTableWrap -->
     </div>
     <div id="distPanel" style="background:var(--panel2);border-top:1px solid var(--line);padding:6px 12px;font-size:11px;overflow-x:auto">
       <strong style="color:var(--accent);font-size:11px">Proximity — sensor / door to obstacle</strong>
@@ -732,14 +738,21 @@ function topForeshorten(sensor, door, openDeg, side){
   const pose=sensorPoseAtAngle(sensor, door, openDeg, side);
   return Math.abs(Math.cos(pose.facing));
 }
+// Top-view projected beam center angle for a sensor (in X-Y plane).
+// 3D beam axis: [sin(pitch), cos(facing)*cos(pitch), sin(facing)*cos(pitch)].
+// Top-view projects to X=sin(pitch), Y=cos(facing)*cos(pitch).
+function sensorTopAngle(sensor, pose){
+  const p=deg2rad(sensor.pitchDeg||0);
+  return Math.atan2(Math.cos(pose.facing)*Math.cos(p), Math.sin(p));
+}
 // Top-view horizontal FOV fan (X-Y). Apex at sensor (X, current Y), centered on
-// the outboard direction, spread = hFovDeg, range foreshortened for beam tilt.
+// the actual projected beam direction derived from yaw+pitch.
 function sensorFovTop(sensor, door, openDeg, side, segs=20){
   const pose=sensorPoseAtAngle(sensor, door, openDeg, side); // pose.x = world Y
   const cx=door.hingeX+sensor.posX, cy=pose.x;
   const fs=topForeshorten(sensor, door, openDeg, side);
   const maxR=sensor.maxRangeMm*fs, minR=sensor.minRangeMm*fs;
-  const base = side==="RH" ? Math.PI/2 : -Math.PI/2; // +Y (RH) or -Y (LH) outboard
+  const base=sensorTopAngle(sensor, pose);
   const half=deg2rad(sensor.hFovDeg/2), a0=base-half, a1=base+half;
   const outer=[], inner=[];
   for(let i=0;i<=segs;i++){ const a=a0+(a1-a0)*i/segs;
@@ -1206,7 +1219,7 @@ function drawSensor(s,openDeg,side){
   const top=curPlane==="top";
   const anchor = top ? {x:project.door.hingeX+s.posX, y:pose.x} : {x:pose.x, y:pose.y};
   const p=worldToScreen(anchor);
-  const fa = top ? (side==="RH"?Math.PI/2:-Math.PI/2) : pose.facing;
+  const fa = top ? sensorTopAngle(s, pose) : pose.facing;
   const tip=worldToScreen({x:anchor.x+Math.cos(fa)*400, y:anchor.y+Math.sin(fa)*400});
   ctx.strokeStyle=c; ctx.lineWidth=2; ctx.beginPath();
   ctx.moveTo(p.x,p.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
@@ -2499,6 +2512,12 @@ function updateDoorPctLabel(){
   const inp=$("doorAngInput"); if(inp && document.activeElement!==inp) inp.value=ang.toFixed(1);
   const t=(project.door.openTimeS||0)*pct/100;
   $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
+}
+function toggleResultsTable(){
+  const wrap=$("tpTableWrap"), btn=$("tpToggleBtn"); if(!wrap||!btn) return;
+  const hidden=wrap.style.display==="none";
+  wrap.style.display=hidden?"":"none";
+  btn.textContent=hidden?"Hide":"Show";
 }
 function toggleProxLines(){
   const cb=$("showProxLines"); if(!cb) return;
