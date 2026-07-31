@@ -1556,10 +1556,28 @@ function draw3DScene(){
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
   const d=project.door, side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
-  // ground grid (z=0)
-  const g=2500, step=500;
-  for(let x=-g;x<=g;x+=step){ line3({x,y:-g,z:0},{x,y:g,z:0},"#161b22",1); }
-  for(let y=-g;y<=g;y+=step){ line3({x:-g,y,z:0},{x:g,y,z:0},"#161b22",1); }
+  // ground floor + grid at z=0 (matches the 2D top-view grid resolution)
+  const g=3000;
+  // filled floor quad so the ground plane is clearly visible
+  const fc=[{x:-g,y:-g,z:0},{x:g,y:-g,z:0},{x:g,y:g,z:0},{x:-g,y:g,z:0}];
+  ctx.beginPath();
+  fc.forEach((p,i)=>{ const q=project3D(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+  ctx.closePath(); ctx.fillStyle="rgba(60,80,110,.14)"; ctx.fill();
+  // grid lines: minor at gridCellMm, major every 5 cells (guard against too many)
+  const cell=gridCellMm, major=cell*5;
+  const nDiv=2*g/cell;
+  if(nDiv<=160){
+    for(let x=-g;x<=g+1;x+=cell){ if(Math.round(x)%major!==0) line3({x,y:-g,z:0},{x,y:g,z:0},"#1c2530",1); }
+    for(let y=-g;y<=g+1;y+=cell){ if(Math.round(y)%major!==0) line3({x:-g,y,z:0},{x:g,y,z:0},"#1c2530",1); }
+  }
+  for(let x=-g;x<=g+1;x+=major){ line3({x,y:-g,z:0},{x,y:g,z:0},"#33465c",1); }
+  for(let y=-g;y<=g+1;y+=major){ line3({x:-g,y,z:0},{x:g,y,z:0},"#33465c",1); }
+  // floor distance labels along the X and Y axes (every major line)
+  const cmFmt3=v=>Math.abs(v)>=1000?(v/1000).toFixed(v%1000===0?0:1)+"m":Math.round(v/10)+"cm";
+  ctx.fillStyle="rgba(180,200,225,.55)"; ctx.font="10px sans-serif"; ctx.textAlign="center";
+  for(let x=-g;x<=g+1;x+=major){ if(x===0) continue; const q=project3D({x,y:0,z:0}); ctx.fillText(cmFmt3(x),q.x,q.y); }
+  for(let y=-g;y<=g+1;y+=major){ if(y===0) continue; const q=project3D({x:0,y,z:0}); ctx.fillText(cmFmt3(y),q.x,q.y); }
+  ctx.textAlign="left";
   // axes
   line3({x:0,y:0,z:0},{x:1500,y:0,z:0},"#5a6b7b",2); // X
   line3({x:0,y:0,z:0},{x:0,y:1500,z:0},"#5a6b7b",2); // Y
