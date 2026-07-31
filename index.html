@@ -391,13 +391,16 @@ a.dl{color:var(--accent)}
         <label>Heatmap</label>
         <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
         <button onclick="clearHeatmap()">Clear</button>
-        <label><input type="checkbox" id="showProxLines" checked> Proximity lines</label>
+        <label><input type="checkbox" id="showProxLines" checked onchange="const b=$('proxToggleBtn');if(b)b.textContent='Prox lines: '+(this.checked?'ON':'OFF');render()"> Proximity lines</label>
       </div>
       <div class="grp">
         <label>Door position</label>
         <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
         <span id="doorPctVal" class="mini">0%</span>
-        <span id="doorAngVal" class="mini"></span>
+        <input type="number" id="doorAngInput" min="-180" max="180" step="0.5" value="0"
+          title="Door angle (°) — type to set position"
+          style="width:60px;font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 4px">
+        <span class="mini">°</span>
         <span id="doorTimeVal" class="mini"></span>
       </div>
       <div class="grp">
@@ -425,6 +428,9 @@ a.dl{color:var(--accent)}
       <div class="canvas-pane" id="pane1">
         <canvas id="cv"></canvas>
         <span class="pane-label" id="cvLabel"></span>
+        <button id="proxToggleBtn" onclick="toggleProxLines()"
+          title="Show/hide proximity lines"
+          style="position:absolute;top:6px;right:6px;font-size:10px;padding:3px 7px;opacity:0.82;z-index:10">Prox lines: ON</button>
       </div>
       <div class="canvas-pane" id="pane2" style="display:none">
         <canvas id="cv2"></canvas>
@@ -2490,9 +2496,15 @@ function updateDoorPctLabel(){
   const pct=project.view.doorPct;
   $("doorPctVal").textContent=pct.toFixed(0)+"%";
   const ang=doorAngleForPercent(pct,project.door,project.project.doorSide);
-  $("doorAngVal").textContent="("+ang.toFixed(1)+"°)";
+  const inp=$("doorAngInput"); if(inp && document.activeElement!==inp) inp.value=ang.toFixed(1);
   const t=(project.door.openTimeS||0)*pct/100;
   $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
+}
+function toggleProxLines(){
+  const cb=$("showProxLines"); if(!cb) return;
+  cb.checked=!cb.checked;
+  const btn=$("proxToggleBtn"); if(btn) btn.textContent="Prox lines: "+(cb.checked?"ON":"OFF");
+  render();
 }
 function loadDynamicFields(){
   const d=project.door, t=project.timing;
@@ -2624,6 +2636,14 @@ function bindToolbar(){
     pauseAnim();
     project.view.doorPct=parseFloat($("doorPct").value);
     updateDoorPctLabel(); recomputeAll(); render(); refreshDoorPanels();
+  });
+  $("doorAngInput").addEventListener("change",()=>{
+    pauseAnim();
+    const ang=parseFloat($("doorAngInput").value)||0;
+    const sign=project.project.doorSide==="RH"?1:-1;
+    const maxDeg=project.door.maxOpenDeg||80;
+    const pct=Math.max(0,Math.min(100, Math.abs(ang)/maxDeg*100));
+    setDoorPct(pct);
   });
   ["showSwept","showGhost","showMeasured"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("dynOverlay").addEventListener("change",render);
