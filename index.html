@@ -231,7 +231,7 @@ a.dl{color:var(--accent)}
               <select id="tpSetObs"></select></div>
             <div class="field"><button class="primary" onclick="loadDoorZoneTestSet()">Load 21-point set</button></div>
           </div>
-          <p class="mini" style="color:var(--muted)">Standard 7×3 grid at z=0. Loading replaces any existing P1–P21 points.</p>
+          <p class="mini" style="color:var(--muted)">7×3 grid, z=0. Y measured outboard from the door edge (re-anchors per door). Loading replaces any existing P1–P21 points.</p>
         </div>
         <p class="hint" style="margin-top:12px">Blind points (inside the door swept
           envelope but outside the sensor FOV, criterion&nbsp;12) are highlighted red
@@ -2000,27 +2000,46 @@ function addTestPointManual(){
   addTestPoint(parseFloat($("tp_x").value)||0, parseFloat($("tp_y").value)||0,
     parseFloat($("tp_z").value)||0, $("tp_obs").value);
 }
-// Standard 21-point door-zone test grid (mm). x = fore-aft (0 = center column,
-// 60 cm spacing), y = outboard (bottom −200, middle −400, top −950), z = 0.
+// Standard 21-point door-zone test grid. x = fore-aft (0 = center column,
+// 60 cm spacing). The third value is the OUTBOARD distance (mm) from the door
+// edge (y=0 at the door edge); the world Y is computed per door at load/recompute.
 const DOOR_ZONE_TEST_SET=[
-  ["P1",-1800,-200],["P2",-1800,-400],["P3",-1800,-950],
-  ["P4",-1200,-950],["P5",-600,-950],["P6",0,-950],
-  ["P7",600,-950],["P8",1200,-950],["P9",1800,-950],
-  ["P10",1800,-400],["P11",1800,-200],
-  ["P12",1200,-400],["P13",600,-400],["P14",0,-400],
-  ["P15",-600,-400],["P16",-1200,-400],
-  ["P17",-1200,-200],["P18",-600,-200],["P19",0,-200],
-  ["P20",600,-200],["P21",1200,-200],
+  ["P1",-1800,200],["P2",-1800,400],["P3",-1800,950],
+  ["P4",-1200,950],["P5",-600,950],["P6",0,950],
+  ["P7",600,950],["P8",1200,950],["P9",1800,950],
+  ["P10",1800,400],["P11",1800,200],
+  ["P12",1200,400],["P13",600,400],["P14",0,400],
+  ["P15",-600,400],["P16",-1200,400],
+  ["P17",-1200,200],["P18",-600,200],["P19",0,200],
+  ["P20",600,200],["P21",1200,200],
 ];
+// Outboard-most Y of the door at closed position — the door's outer edge.
+function doorEdgeY(){
+  const side=project.project.doorSide;
+  const poly=doorPolygonAtAngle(project.door, 0, side); // plane.x = world Y
+  if(!poly.length) return 0;
+  const ys=poly.map(p=>p.x);
+  return side==="RH" ? Math.max(...ys) : Math.min(...ys);
+}
+function doorOutboardSign(){ return project.project.doorSide==="RH" ? 1 : -1; }
+// Re-anchor door-edge-relative test points to the current door (per-door update).
+function refreshDoorRelTestPoints(){
+  if(!project||!project.testPoints) return;
+  const edge=doorEdgeY(), sign=doorOutboardSign();
+  for(const tp of project.testPoints){
+    if(tp.doorRel) tp.y=Math.round(edge+sign*tp.yMag);
+  }
+}
 function loadDoorZoneTestSet(){
   const obsId=($("tpSetObs")&&$("tpSetObs").value)
     || (project.obstacles[0]&&project.obstacles[0].id) || "";
   // remove any previously loaded P# points so re-loading refreshes cleanly
   project.testPoints=project.testPoints.filter(t=>!/^P\d+$/.test(t.id));
   const doorPct=project.view.doorPct;
-  for(const [id,x,y] of DOOR_ZONE_TEST_SET){
-    const tp={ id, x, y, z:0, doorPct, obstacleId:obsId,
-      sensorId:null, inFov:false, blind:false, result:"", comments:"" };
+  const edge=doorEdgeY(), sign=doorOutboardSign();
+  for(const [id,x,mag] of DOOR_ZONE_TEST_SET){
+    const tp={ id, x, y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
+      doorRel:true, yMag:mag, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
     project.testPoints.push(tp);
     evaluateTestPoint(tp);
   }
@@ -2073,7 +2092,7 @@ function measuredFovHull(){
   const pts=project.testPoints.filter(t=>t.result==="PASS").map(t=>({x:t.y,y:t.z}));
   return pts.length>=3 ? convexHull(pts) : null;
 }
-function recomputeAll(){ overlapCache=null; project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+function recomputeAll(){ overlapCache=null; refreshDoorRelTestPoints(); project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
 
 /* ========================= HEATMAP ========================= */
 function _pip(px,py,poly){ // ray-casting point-in-polygon
