@@ -445,9 +445,19 @@ a.dl{color:var(--accent)}
         <div id="tpTableWrap">
           <table id="tpTable">
             <thead><tr>
-              <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
-              <th>X</th><th>Y</th><th>Z</th><th>In FOV</th><th>Blind</th>
-              <th>Reps</th><th>Det.rate</th><th>Result</th><th>Comments</th><th></th>
+              <th title="Unique test-point label">ID</th>
+              <th title="Door opening % this point was recorded/evaluated at">Door%</th>
+              <th title="Which sensor (if any) currently covers this point">Sensor</th>
+              <th title="Obstacle this point is associated with">Obstacle</th>
+              <th title="Fore-aft position (mm)">X</th>
+              <th title="Lateral / outboard position (mm)">Y</th>
+              <th title="Height above ground (mm)">Z</th>
+              <th title="Inside at least one active sensor's field of view at this door %">In FOV</th>
+              <th title="Inside the door swept envelope but not seen by any sensor (blind spot)">Blind</th>
+              <th title="Number of measured repetitions imported for this point">Reps</th>
+              <th title="Detection rate across the measured repetitions">Det.rate</th>
+              <th title="PASS / CONDITIONAL / FAIL — auto from FOV or from measured rate; editable">Result</th>
+              <th>Comments</th><th></th>
             </tr></thead>
             <tbody id="tpBody"></tbody>
           </table>
@@ -461,6 +471,7 @@ a.dl{color:var(--accent)}
               <th style="padding:2px 8px">ΔX fwd</th>
               <th style="padding:2px 8px">ΔY lat</th>
               <th style="padding:2px 8px">ΔZ up</th>
+              <th style="padding:2px 8px" title="Door opening (% and angle) at which the door first touches the object. If the door never reaches it, shows the max open angle.">Open @ contact</th>
             </tr></thead>
             <tbody id="distBody"></tbody>
           </table>
@@ -2110,6 +2121,19 @@ function distDoorToObs(o, openDeg, side){
   return {dx:Math.round(xGap), dyz:Math.round(minYZ),
           dist:Math.round(Math.sqrt(minYZ*minYZ+xGap*xGap))};
 }
+// Sweep the opening door and find the opening (% and angle) at which the door
+// first reaches the object (door→object distance = 0). If the door never
+// touches the object across its full travel, report the max open angle instead.
+function doorOpenBeforeContact(o){
+  const side=project.project.doorSide, door=project.door;
+  const maxDeg=Math.abs(doorAngleForPercent(100,door,side));
+  for(let pct=0; pct<=100.0001; pct+=0.5){
+    const od=doorAngleForPercent(pct,door,side);
+    if(distDoorToObs(o,od,side).dist<=0)
+      return {contact:true, pct:Math.round(pct*2)/2, deg:Math.abs(od)};
+  }
+  return {contact:false, pct:100, deg:maxDeg};
+}
 
 function updateDistPanel(){
   const body=$("distBody"); if(!body||!project) return;
@@ -2125,15 +2149,19 @@ function updateDistPanel(){
       const d=distPointToObs(sp,o);
       const col=d.dist<(s.stopMm||300)?"var(--red)":d.dist<(s.warningMm||800)?"var(--yellow)":"var(--green)";
       rows.push(`<tr><td style="padding:2px 6px"><span style="color:${col}">●</span> ${s.id}→${o.id}</td>
-        ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dy)}${fmt(d.dz)}</tr>`);
+        ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dy)}${fmt(d.dz)}${fmt("—")}</tr>`);
     }
   }
   for(const o of project.obstacles){
     const d=distDoorToObs(o,openDeg,side);
+    const c=doorOpenBeforeContact(o);
+    const cCol=c.contact?"var(--red)":"var(--green)";
+    const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
     rows.push(`<tr><td style="padding:2px 6px;color:var(--muted)">Door→${o.id}</td>
-      ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dyz+" Y-Z")}${fmt("—")}</tr>`);
+      ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dyz+" Y-Z")}${fmt("—")}
+      <td style="text-align:right;padding:2px 6px;color:${cCol}" title="${c.contact?'Door contacts the object at this opening':'Door never reaches the object; max opening shown'}">${cTxt}</td></tr>`);
   }
-  body.innerHTML=rows.join("") || `<tr><td colspan="5" style="padding:4px 6px;color:var(--muted)">No sensors or obstacles</td></tr>`;
+  body.innerHTML=rows.join("") || `<tr><td colspan="6" style="padding:4px 6px;color:var(--muted)">No sensors or obstacles</td></tr>`;
 }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
 
