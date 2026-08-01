@@ -727,7 +727,10 @@ function doorFootprintTop(door, openDeg, side){
 // straight up/down this is ~0 (no horizontal coverage).
 function topForeshorten(sensor, door, openDeg, side){
   const pose=sensorPoseAtAngle(sensor, door, openDeg, side);
-  return Math.abs(Math.cos(pose.facing));
+  // Ground (X-Y) projection length of the unit beam axis
+  // [sin p, cos f·cos p, sin f·cos p]; pitch p tilts the beam fore-aft (+X).
+  const p=deg2rad(sensor.pitchDeg||0);
+  return Math.hypot(Math.sin(p), Math.cos(pose.facing)*Math.cos(p));
 }
 // Top-view projected beam center angle for a sensor (in X-Y plane).
 // 3D beam axis: [sin(pitch), cos(facing)*cos(pitch), sin(facing)*cos(pitch)].
@@ -943,79 +946,6 @@ function computeConfigMetrics(cfg){
       measRate, minMargin, worst };
   });
 }
-let compareB=null; // runtime-only loaded Config B (not persisted)
-function bindCompare(){
-  $("cmpFile").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
-    const rd=new FileReader();
-    rd.onload=()=>{ try{ compareB=normalizeLoaded(JSON.parse(rd.result)); renderCompare(); render(); }
-      catch(err){ alert("Invalid JSON: "+err.message); } };
-    rd.readAsText(f); });
-  $("cmpOverlay").addEventListener("change",render);
-}
-function clearCompareB(){ compareB=null; $("cmpFile").value=""; renderCompare(); render(); }
-function renderCompare(){
-  const el=$("cmpResult"); if(!el) return;
-  const A=computeConfigMetrics(project);
-  if(!compareB){ el.innerHTML='<p class="mini">Load a Config B file to compare.</p>'; return; }
-  const B=computeConfigMetrics(compareB);
-  // rows: [label, aVal, bVal, betterDir]  dir: +1 higher better, -1 lower better, 0 none
-  const rows=[
-    ["Name",A.name,B.name,0],["Door side",A.side,B.side,0],
-    ["Sensors (active)",`${A.sensors} (${A.active})`,`${B.sensors} (${B.active})`,0],
-    ["Max open °",A.maxOpen,B.maxOpen,0],
-    ["Test points",A.tps,B.tps,0],
-    ["PASS",A.pass,B.pass,1],["FAIL",A.fail,B.fail,-1],
-    ["Blind zones",A.blind,B.blind,-1],
-    ["Coverage %",A.cov,B.cov,1],
-    ["Measured rate %",A.measRate,B.measRate,1],
-    ["Min margin ms",A.minMargin,B.minMargin,1],
-    ["Worst verdict",A.worst,B.worst,0]
-  ];
-  const cell=(v)=>v==null?"—":v;
-  const body=rows.map(([lab,a,b,dir])=>{
-    let ca="",cb="";
-    if(dir&&a!=null&&b!=null&&a!==b){
-      const aBetter = dir>0 ? a>b : a<b;
-      if(aBetter) ca="background:rgba(57,211,83,.18)"; else cb="background:rgba(57,211,83,.18)";
-    }
-    let d="";
-    if(dir&&typeof a==="number"&&typeof b==="number") d=(b-a>0?"+":"")+(b-a);
-    return `<tr><td>${lab}</td><td style="${ca}">${cell(a)}</td>
-      <td style="${cb}">${cell(b)}</td><td class="mini">${d}</td></tr>`;
-  }).join("");
-  el.innerHTML=`<table><tr><th>Metric</th><th>A (current)</th><th>B</th><th>Δ</th></tr>${body}</table>
-    <p class="mini">Green = better value. Δ = B − A. Enable the overlay to see B's
-      door &amp; FOV (orange) on the front view.</p>`;
-}
-
-/* ---- Phase 4: overlap panel ---- */
-function runOverlap(){ overlapCache=null; renderOverlap(); render(); }
-function renderOverlap(){
-  const el=$("ovResult"); if(!el) return;
-  const a=overlapAnalysis(project.view.doorPct);
-  overlapCache={pct:Math.round(project.view.doorPct),
-    nSensors:project.sensors.filter(s=>s.active).length, data:a};
-  if(a.n===0){ el.innerHTML='<p class="mini">No active sensors.</p>'; return; }
-  if(a.n===1){ el.innerHTML='<p class="mini">Only 1 active sensor — add another sensor '
-    +'(Sensors tab) to analyze overlap.</p>'; return; }
-  const m2=v=>v.toFixed(2)+" m²";
-  const pairRows=a.pairs.length? a.pairs.map(pr=>`<tr><td>${pr.k}</td><td>${m2(pr.area)}</td></tr>`).join("")
-    : `<tr><td colspan="2" class="mini">No overlap between any sensor pair.</td></tr>`;
-  el.innerHTML=`
-    <div class="dash">
-      <div class="stat"><div class="n">${a.n}</div><div class="l">Active sensors</div></div>
-      <div class="stat"><div class="n">${a.maxDepth}</div><div class="l">Max overlap depth</div></div>
-      <div class="stat"><div class="n">${m2(a.coveredArea)}</div><div class="l">Covered area</div></div>
-      <div class="stat"><div class="n" style="color:var(--green)">${m2(a.overlapArea)}</div><div class="l">Overlap (≥2)</div></div>
-      <div class="stat"><div class="n">${(a.overlapRatio*100).toFixed(0)}%</div><div class="l">Overlap ratio</div></div>
-      <div class="stat"><div class="n ${a.gapArea>0?'danger':''}">${m2(a.gapArea)}</div><div class="l">Gap between sensors</div></div>
-    </div>
-    <p class="mini" style="margin-top:10px;color:var(--accent)">Pairwise overlap</p>
-    <table><tr><th>Sensor pair</th><th>Overlap area</th></tr>${pairRows}</table>
-    <p class="mini">Grid ${a.grid} mm. Enable the map to see overlap (teal), single
-      coverage (blue), and gaps (red) on the front view.</p>`;
-}
-
 /* ---- Phase 4: motion-compensation panel (§13) ---- */
 function bindMotion(){
   $("showVel").addEventListener("change",render);
@@ -1352,10 +1282,6 @@ function drawProximityLines(){
 function render(){
   if(!project) return;
   updateDistPanel();
-  const lc=$("legendCmp");
-  if(lc) lc.style.display = (compareB && $("cmpOverlay") && $("cmpOverlay").checked) ? "flex" : "none";
-  const ovOn = $("showOverlap") && $("showOverlap").checked && project.view.plane!=="top";
-  document.querySelectorAll(".legOv").forEach(e=>e.style.display=ovOn?"flex":"none");
   if($("cam3dGroup")) $("cam3dGroup").style.display = project.view.plane==="3d" ? "inline-flex" : "none";
   const plane=project.view.plane;
   if(plane==="split"){
@@ -1400,7 +1326,6 @@ function drawScene(){
         drawSensorFov(s,od,side,c+"0d",c+"2e",1); } });
     }
   }
-  drawOverlapMap();
   // Measured FOV boundary from PASS points (§9.2), front plane only.
   if(curPlane==="front" && $("showMeasured").checked){
     const hull=measuredFovHull();
@@ -1410,7 +1335,6 @@ function drawScene(){
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
   drawDynamicOverlay(side);
-  drawCompareOverlay();
   drawVelocityVectors();
   drawObstacles();
   drawProximityLines();
@@ -1711,34 +1635,6 @@ function drawVelocityVectors(){
   }
 }
 // Multi-sensor overlap heatmap (front view). Cached by door position.
-let overlapCache=null; // {pct, nSensors, data}
-function drawOverlapMap(){
-  if(curPlane!=="front" || !$("showOverlap") || !$("showOverlap").checked) return;
-  const pct=Math.round(project.view.doorPct), ns=project.sensors.filter(s=>s.active).length;
-  if(!overlapCache || overlapCache.pct!==pct || overlapCache.nSensors!==ns)
-    overlapCache={pct, nSensors:ns, data:overlapAnalysis(project.view.doorPct)};
-  const a=overlapCache.data, half=a.grid*curView.zoom/2;
-  for(const c of a.cells){
-    const q=worldToScreen({x:c.x,y:c.y});
-    ctx.fillStyle = c.cnt>=2 ? "rgba(45,212,191,.45)"      // overlap ≥2 (teal)
-      : c.cnt===1 ? "rgba(77,163,255,.10)"                 // single (faint blue)
-      : "rgba(248,81,73,.40)";                             // gap (red)
-    ctx.fillRect(q.x-half,q.y-half,half*2+0.5,half*2+0.5);
-  }
-}
-// Overlay Config B's door + sensor FOVs (orange) at the shared door position.
-// Front view only for v1; uses B's own door/sensors/side directly (no swap).
-function drawCompareOverlay(){
-  if(curPlane!=="front" || !compareB || !$("cmpOverlay") || !$("cmpOverlay").checked) return;
-  const bs=compareB.project.doorSide;
-  const od=doorAngleForPercent(project.view.doorPct, compareB.door, bs);
-  for(const s of compareB.sensors){ if(!s.active) continue;
-    const pose=sensorPoseAtAngle(s, compareB.door, od, bs);
-    fillPoly(fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm),
-      "rgba(255,152,0,.08)","rgba(255,152,0,.55)",1);
-  }
-  fillPoly(doorPolygonAtAngle(compareB.door, od, bs), null, "rgba(255,152,0,.95)", 2);
-}
 // Mark first-detection and first-contact door positions from the last run.
 function drawDynamicOverlay(side){
   if(!dynLast || !$("dynOverlay") || !$("dynOverlay").checked) return;
@@ -2005,10 +1901,12 @@ function doorOutboardSign(){ return project.project.doorSide==="RH" ? 1 : -1; }
 function refreshDoorRelTestPoints(){
   if(!project||!project.testPoints) return;
   const edge=doorEdgeY(), sign=doorOutboardSign(), xShift=project.testSetXShift||0;
+  const pct=project.view.doorPct;
   for(const tp of project.testPoints){
     if(tp.doorRel){
       tp.y=Math.round(edge+sign*tp.yMag);
       if(tp.xBase!=null) tp.x=Math.round(tp.xBase+xShift);
+      tp.doorPct=pct; // door-zone set re-evaluates at the current door position
     }
   }
 }
@@ -2061,12 +1959,12 @@ function rateResult(rate){
 // Auto in-FOV + blind evaluation (criteria 9 & 12). Plane = (Y,Z).
 // When measured repetitions exist, the result comes from the detection rate (§16);
 // otherwise from the geometric in-FOV check.
-function evaluateTestPoint(tp){
+function evaluateTestPoint(tp, sweptPoly){
   const pt={x:tp.y, y:tp.z};
   const sid=isInAnyFov(pt, tp.doorPct);
   tp.sensorId=sid; tp.inFov=!!sid;
-  const inSwept=pointInPolygon(pt,
-    sweptEnvelopePolygon(project.door,project.project.doorSide));
+  const swept = sweptPoly || sweptEnvelopePolygon(project.door,project.project.doorSide);
+  const inSwept=pointInPolygon(pt, swept);
   tp.blind = inSwept && !tp.inFov;
   if(tp._manual) return;
   const st=tpStats(tp);
@@ -2078,7 +1976,12 @@ function measuredFovHull(){
   const pts=project.testPoints.filter(t=>t.result==="PASS").map(t=>({x:t.y,y:t.z}));
   return pts.length>=3 ? convexHull(pts) : null;
 }
-function recomputeAll(){ overlapCache=null; refreshDoorRelTestPoints(); project.testPoints.forEach(evaluateTestPoint); renderTpTable(); }
+function recomputeAll(){
+  refreshDoorRelTestPoints();
+  const swept=sweptEnvelopePolygon(project.door,project.project.doorSide);
+  project.testPoints.forEach(tp=>evaluateTestPoint(tp,swept));
+  renderTpTable();
+}
 
 /* ========================= HEATMAP ========================= */
 function _pip(px,py,poly){ // ray-casting point-in-polygon
@@ -2234,98 +2137,6 @@ function updateDistPanel(){
 }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
 
-/* ---- Phase 3: CSV data import (§19) + repeatability (§16) ---- */
-// Minimal CSV parser (handles quoted fields and commas within quotes).
-function parseCSV(text){
-  const rows=[]; let i=0, field="", row=[], q=false;
-  const pushF=()=>{row.push(field);field="";}, pushR=()=>{pushF();rows.push(row);row=[];};
-  while(i<text.length){
-    const c=text[i];
-    if(q){ if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; } else field+=c; }
-    else if(c==='"') q=true;
-    else if(c===',') pushF();
-    else if(c==='\r'){}
-    else if(c==='\n') pushR();
-    else field+=c;
-    i++;
-  }
-  if(field.length||row.length) pushR();
-  const headers=(rows.shift()||[]).map(h=>h.trim());
-  return { headers, rows:rows.filter(r=>r.some(v=>v!=="")) };
-}
-let pendingCsv=null; // {headers, rows}
-function onCsvFile(file){
-  const rd=new FileReader();
-  rd.onload=()=>{
-    pendingCsv=parseCSV(rd.result);
-    const opts='<option value="">(none)</option>'+
-      pendingCsv.headers.map((h,i)=>`<option value="${i}">${h||("col"+i)}</option>`).join("");
-    ["m_id","m_pct","m_x","m_y","m_z","m_det","m_obs","m_meas","m_act","m_delay"]
-      .forEach(id=>{ $(id).innerHTML=opts; });
-    // Best-guess auto-map by header name.
-    const find=(re)=>{ const i=pendingCsv.headers.findIndex(h=>re.test(h)); return i<0?"":String(i); };
-    $("m_id").value=find(/point.?id|test.?point|^id$/i);
-    $("m_pct").value=find(/door.*(pos|%|percent)/i);
-    $("m_x").value=find(/(^|_)x(_mm)?$|obstacle_x/i);
-    $("m_y").value=find(/(^|_)y(_mm)?$|obstacle_y/i);
-    $("m_z").value=find(/(^|_)z(_mm)?$|obstacle_z/i);
-    $("m_det").value=find(/result|detect|status|pass/i);
-    $("m_obs").value=find(/obstacle.*type|^type$/i);
-    $("m_meas").value=find(/measured.*dist/i);
-    $("m_act").value=find(/actual.*dist/i);
-    $("m_delay").value=find(/delay|latency|time.?ms/i);
-    $("csvMap").style.display="block";
-    $("csvInfo").textContent=pendingCsv.rows.length+" rows, "+pendingCsv.headers.length+" columns";
-  };
-  rd.readAsText(file);
-}
-const isDetected=v=>/^(1|y|yes|true|pass|detect|detected|ok)/i.test(String(v).trim());
-function importCsvMapped(){
-  if(!pendingCsv){ alert("Choose a CSV file first."); return; }
-  const gi=id=>{ const v=$(id).value; return v===""?-1:parseInt(v,10); };
-  const cId=gi("m_id"),cPct=gi("m_pct"),cX=gi("m_x"),cY=gi("m_y"),cZ=gi("m_z"),
-    cDet=gi("m_det"),cObs=gi("m_obs"),cMeas=gi("m_meas"),cAct=gi("m_act"),cDelay=gi("m_delay");
-  const num=(r,c,d)=>{ if(c<0)return d; const v=parseFloat(r[c]); return isNaN(v)?d:v; };
-  if($("m_replace").checked) project.testPoints=[];
-  const byId={}; project.testPoints.forEach(t=>byId[t.id]=t);
-  let added=0, reps=0;
-  for(const r of pendingCsv.rows){
-    const x=num(r,cX,0), y=num(r,cY,0), z=num(r,cZ,0), pct=num(r,cPct,0);
-    const key = cId>=0 && r[cId] ? r[cId].trim()
-      : `IMP-D${Math.round(pct)}-X${Math.round(x)}-Y${Math.round(y)}-Z${Math.round(z)}`;
-    let tp=byId[key];
-    if(!tp){ tp={ id:key, x,y,z, doorPct:pct,
-        obstacleId: cObs>=0? (r[cObs]||"").trim() : (project.obstacles[0]&&project.obstacles[0].id)||"",
-        sensorId:null, inFov:false, blind:false, result:"", comments:"", reps:[] };
-      project.testPoints.push(tp); byId[key]=tp; added++;
-    }
-    if(!tp.reps) tp.reps=[];
-    const detected = cDet>=0 ? isDetected(r[cDet]) : true;
-    tp.reps.push({ detected, measuredMm:num(r,cMeas,NaN), actualMm:num(r,cAct,NaN),
-      delayMs:num(r,cDelay,NaN), false:false });
-    reps++;
-  }
-  seq.t=Math.max(seq.t, project.testPoints.length);
-  recomputeAll(); renderRepSummary(); render();
-  $("csvInfo").textContent=`Imported ${reps} rows → ${added} new point(s), ${project.testPoints.length} total.`;
-}
-// Repeatability summary (§16) across all points with measured data.
-function renderRepSummary(){
-  const el=$("repSummary"); if(!el) return;
-  const withReps=project.testPoints.filter(t=>t.reps&&t.reps.length);
-  if(!withReps.length){ el.innerHTML='<p class="mini">No measured repetitions imported yet.</p>'; return; }
-  let totalReps=0, totalDet=0;
-  const rows=withReps.map(t=>{ const s=tpStats(t); totalReps+=s.n; totalDet+=s.det;
-    const rb=t.result==="PASS"?"b-pass":t.result==="FAIL"?"b-fail":t.result==="CONDITIONAL PASS"?"b-cond":"b-nt";
-    return `<tr><td>${t.id}</td><td>${s.n}</td><td>${s.rate.toFixed(0)}%</td>
-      <td>${s.meanMm!=null?Math.round(s.meanMm):"—"}</td>
-      <td>${s.stdMm!=null?Math.round(s.stdMm):"—"}</td>
-      <td>${s.maxDelay!=null?Math.round(s.maxDelay):"—"}</td>
-      <td><span class="badge ${rb}">${t.result||"—"}</span></td></tr>`; }).join("");
-  const overall= totalReps? (totalDet/totalReps*100).toFixed(1):0;
-  el.innerHTML=`<p class="mini">${withReps.length} point(s), ${totalReps} repetitions, overall detection ${overall}%.</p>
-    <table><tr><th>Point</th><th>N</th><th>Rate</th><th>Mean mm</th><th>Std</th><th>Max delay</th><th>Result</th></tr>${rows}</table>`;
-}
 
 function renderTpTable(){
   const body=$("tpBody"); body.innerHTML="";
@@ -2356,29 +2167,6 @@ function renderTpTable(){
   });
 }
 
-/* ---- Dashboard (Section 22 subset) ---- */
-function renderDashboard(){
-  const tps=project.testPoints;
-  const total=tps.length;
-  const tested=tps.filter(t=>t.result).length;
-  const pass=tps.filter(t=>t.result==="PASS").length;
-  const fail=tps.filter(t=>t.result==="FAIL").length;
-  const cond=tps.filter(t=>t.result==="CONDITIONAL PASS").length;
-  const blind=tps.filter(t=>t.blind).length;
-  const cov= total? Math.round(pass/total*100):0;
-  // Measured-data (repeatability) rollup (§16).
-  const withReps=tps.filter(t=>t.reps&&t.reps.length);
-  let nReps=0, nDet=0; withReps.forEach(t=>{const s=tpStats(t); nReps+=s.n; nDet+=s.det;});
-  const measRate = nReps? Math.round(nDet/nReps*100):0;
-  const g=(n,l,cls)=>`<div class="stat"><div class="n ${cls||''}">${n}</div><div class="l">${l}</div></div>`;
-  $("dashGrid").innerHTML=
-    g(total,"Total points")+g(tested,"Tested")+
-    g(pass,"Passed","")+g(fail,"Failed",fail?"danger":"")+
-    g(cond,"Conditional")+g(blind,"Blind points",blind?"danger":"")+
-    g(cov+"%","Detection coverage")+g(project.sensors.filter(s=>s.active).length,"Active sensors")+
-    g(withReps.length,"Measured points")+g(nReps,"Total repetitions")+
-    g(measRate+"%","Measured det. rate",measRate&&measRate<project.eval.condRatePct?"danger":"");
-}
 
 /* ====================== 6. IMPORT / EXPORT ====================== */
 function download(name,content,type){
@@ -2400,7 +2188,7 @@ function normalizeLoaded(data){
   pj.timing = Object.assign(defaultProject().timing, data.timing||{});
   pj.eval = Object.assign(defaultProject().eval, data.eval||{});
   pj.view = Object.assign(defaultProject().view, data.view||{});
-  if(pj.view.plane!=="front"&&pj.view.plane!=="top"&&pj.view.plane!=="split")
+  if(!["front","top","split","3d"].includes(pj.view.plane))
     pj.view.plane="front";
   // Per-plane view transforms (backfill; migrate legacy view.zoom/pan).
   pj.viewFront = Object.assign(planeDefaults("front"), data.viewFront
@@ -2451,9 +2239,21 @@ function exportCsv(){
     rows.join("\n"),"text/csv");
 }
 function exportPng(){
-  cvEl.toBlob(b=>{ const a=document.createElement("a");
+  const save=b=>{ const a=document.createElement("a");
     a.href=URL.createObjectURL(b); a.download="fov_view.png"; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000); };
+  if(project.view.plane==="split"){
+    // stitch the Front and Top panes side-by-side
+    const c1=cvEl, c2=cv2El, gap=1;
+    const tmp=document.createElement("canvas");
+    tmp.width=c1.width+c2.width+gap; tmp.height=Math.max(c1.height,c2.height);
+    const t=tmp.getContext("2d");
+    t.fillStyle="#0a0d11"; t.fillRect(0,0,tmp.width,tmp.height);
+    t.drawImage(c1,0,0); t.drawImage(c2,c1.width+gap,0);
+    tmp.toBlob(save);
+    return;
+  }
+  cvEl.toBlob(save);
 }
 function openReport(){
   const png=cvEl.toDataURL("image/png");
@@ -2551,23 +2351,6 @@ function loadAllUi(){
   $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
 }
-function loadDataFields(){
-  const e=project.eval||{passRatePct:95,condRatePct:90};
-  $("ev_pass").value=e.passRatePct; $("ev_cond").value=e.condRatePct;
-  $("ov_grid").value=(project.overlap||{gridMm:60}).gridMm;
-}
-function bindOverlap(){
-  $("ov_grid").addEventListener("input",()=>{ project.overlap.gridMm=parseFloat($("ov_grid").value)||60;
-    overlapCache=null; });
-  $("showOverlap").addEventListener("change",()=>{ overlapCache=null; render(); });
-}
-function bindData(){
-  $("csvFile").addEventListener("change",e=>{ if(e.target.files[0]) onCsvFile(e.target.files[0]); });
-  $("ev_pass").addEventListener("input",()=>{ project.eval.passRatePct=parseFloat($("ev_pass").value)||0;
-    recomputeAll(); renderRepSummary(); render(); });
-  $("ev_cond").addEventListener("input",()=>{ project.eval.condRatePct=parseFloat($("ev_cond").value)||0;
-    recomputeAll(); renderRepSummary(); render(); });
-}
 function updateDoorPctLabel(){
   const pct=project.view.doorPct;
   $("doorPctVal").textContent=pct.toFixed(0)+"%";
@@ -2575,15 +2358,6 @@ function updateDoorPctLabel(){
   const inp=$("doorAngInput"); if(inp && document.activeElement!==inp) inp.value=ang.toFixed(1);
   const t=(project.door.openTimeS||0)*pct/100;
   $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
-}
-function toggleResultsTable(){
-  const wrap=$("tpTableWrap"), btn=$("tpToggleBtn"), sect=$("resultsSection"); if(!wrap||!btn) return;
-  const hidden=wrap.style.display==="none";
-  wrap.style.display=hidden?"":"none";
-  // collapse the whole panel to just its header so the canvas area grows
-  if(sect) sect.style.height=hidden?"":"auto";
-  btn.textContent=hidden?"Hide":"Show";
-  render(); // refit canvas to the reclaimed space
 }
 // Bottom dock: switch between the Test Points and Proximity tables.
 function setBottomTab(name){
@@ -2769,7 +2543,6 @@ function bindToolbar(){
   $("doorAngInput").addEventListener("change",()=>{
     pauseAnim();
     const ang=parseFloat($("doorAngInput").value)||0;
-    const sign=project.project.doorSide==="RH"?1:-1;
     const maxDeg=project.door.maxOpenDeg||80;
     const pct=Math.max(0,Math.min(100, Math.abs(ang)/maxDeg*100));
     setDoorPct(pct);
