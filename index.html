@@ -113,12 +113,8 @@ a.dl{color:var(--accent)}
       <button data-tab="sensor">Sensors</button>
       <button data-tab="obstacle">Obstacles</button>
       <button data-tab="test">Test Points</button>
-      <button data-tab="data">Data</button>
-      <button data-tab="overlap">Overlap</button>
       <button data-tab="motion">Motion</button>
-      <button data-tab="compare">Compare</button>
       <button data-tab="dynamic">Dynamic</button>
-      <button data-tab="dash">Dashboard</button>
     </div>
     <div class="panels">
 
@@ -240,63 +236,6 @@ a.dl{color:var(--accent)}
           in the table below.</p>
       </div>
 
-      <!-- Data import / repeatability (Phase 3) -->
-      <div class="panel" data-tab="data">
-        <h2>Test Data Import (§16, §19)</h2>
-        <p class="hint">Import a CSV of bench/vehicle results or a sensor log.
-          Map the columns, then import &mdash; rows sharing a point key are grouped
-          into repetitions and a detection rate is computed per point.</p>
-        <div class="field"><label>CSV file</label><input id="csvFile" type="file" accept=".csv,text/csv"></div>
-        <div id="csvMap" style="display:none">
-          <p class="mini" style="color:var(--accent)">Map columns &rarr; fields</p>
-          <div class="row">
-            <div class="field"><label>Point ID (group key)</label><select id="m_id"></select></div>
-            <div class="field"><label>Door %</label><select id="m_pct"></select></div>
-          </div>
-          <div class="row">
-            <div class="field"><label>X (fore-aft)</label><select id="m_x"></select></div>
-            <div class="field"><label>Y (horiz)</label><select id="m_y"></select></div>
-            <div class="field"><label>Z (height)</label><select id="m_z"></select></div>
-          </div>
-          <div class="row">
-            <div class="field"><label>Detected / Result</label><select id="m_det"></select></div>
-            <div class="field"><label>Obstacle type</label><select id="m_obs"></select></div>
-          </div>
-          <div class="row">
-            <div class="field"><label>Measured dist</label><select id="m_meas"></select></div>
-            <div class="field"><label>Actual dist</label><select id="m_act"></select></div>
-            <div class="field"><label>Delay (ms)</label><select id="m_delay"></select></div>
-          </div>
-          <label class="mini"><input type="checkbox" id="m_replace"> Replace existing test points</label>
-          <div style="margin-top:8px">
-            <button class="primary" onclick="importCsvMapped()">Import mapped rows</button>
-            <span id="csvInfo" class="mini"></span>
-          </div>
-        </div>
-        <p class="mini" style="color:var(--accent);margin-top:14px">Detection-rate thresholds (§16)</p>
-        <div class="row">
-          <div class="field"><label>PASS ≥ (%)</label><input id="ev_pass" type="number"></div>
-          <div class="field"><label>CONDITIONAL ≥ (%)</label><input id="ev_cond" type="number"></div>
-        </div>
-        <div id="repSummary" style="margin-top:12px"></div>
-      </div>
-
-      <!-- Multi-sensor overlap analysis (Phase 4, §11.4/§24) -->
-      <div class="panel" data-tab="overlap">
-        <h2>Sensor Overlap Analysis (§11.4)</h2>
-        <p class="hint">Coverage from all active sensors at the current door
-          position: where two or more FOVs overlap (redundant, robust to a single
-          blocked sensor), where only one covers, and gaps between sensors (§24.6).
-          Sensors are rigidly mounted, so overlap is the same at every door angle.</p>
-        <div class="row">
-          <div class="field"><label>Grid step (mm)</label><input id="ov_grid" type="number"></div>
-          <div class="field" style="display:flex;align-items:flex-end">
-            <button class="primary" onclick="runOverlap()">Analyze</button></div>
-        </div>
-        <label class="mini"><input type="checkbox" id="showOverlap"> Show overlap map (front view)</label>
-        <div id="ovResult" style="margin-top:12px"></div>
-      </div>
-
       <!-- Door-movement compensation / radar velocity (Phase 4, §13) -->
       <div class="panel" data-tab="motion">
         <h2>Door-Movement Compensation (§13)</h2>
@@ -311,22 +250,6 @@ a.dl{color:var(--accent)}
           Comp = Measured − Ego radial (§13). A stationary obstacle reads Measured ≈
           +Ego, so its compensated velocity ≈ 0.</p>
         <div id="motionResult" style="margin-top:6px"></div>
-      </div>
-
-      <!-- Configuration comparison (Phase 3, §11.4) -->
-      <div class="panel" data-tab="compare">
-        <h2>Configuration Comparison (§11.4)</h2>
-        <p class="hint">Config A is the current project. Load a second saved project
-          as Config B to compare FOV, coverage, blind zones, and reaction margin
-          &mdash; e.g. sensor position/angle A vs B, 1 vs 2 sensors, or original vs
-          revised.</p>
-        <div class="field"><label>Config B (project JSON)</label>
-          <input id="cmpFile" type="file" accept=".json,application/json"></div>
-        <div class="row" style="align-items:center">
-          <label class="mini"><input type="checkbox" id="cmpOverlay"> Overlay Config B FOV (front view)</label>
-          <button onclick="clearCompareB()">Clear B</button>
-        </div>
-        <div id="cmpResult" style="margin-top:12px"></div>
       </div>
 
       <!-- Dynamic door analysis (Phase 2) -->
@@ -362,12 +285,6 @@ a.dl{color:var(--accent)}
         <canvas id="dynChart" width="300" height="150"
           style="width:100%;height:150px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-top:8px"></canvas>
         <p class="mini" id="dynChartCap" style="text-align:center"></p>
-      </div>
-
-      <!-- Dashboard -->
-      <div class="panel" data-tab="dash">
-        <h2>Dashboard</h2>
-        <div class="dash" id="dashGrid"></div>
       </div>
 
     </div>
@@ -453,9 +370,6 @@ a.dl{color:var(--accent)}
         <div><span class="sw" style="background:var(--green)"></span>Detected / PASS</div>
         <div><span class="sw" style="background:var(--red)"></span>No detect / FAIL</div>
         <div><span class="sw" style="background:var(--gray)"></span>Not tested</div>
-        <div id="legendCmp" style="display:none"><span class="sw" style="background:var(--orange)"></span>Config B FOV</div>
-        <div class="legOv" style="display:none"><span class="sw" style="background:rgba(45,212,191,.7)"></span>Overlap ≥2 sensors</div>
-        <div class="legOv" style="display:none"><span class="sw" style="background:rgba(248,81,73,.7)"></span>Sensor gap</div>
       </div>
     </div>
     <div class="results" id="resultsSection">
@@ -1781,18 +1695,13 @@ function bindTabs(){
     const b=e.target.closest("button"); if(!b) return;
     document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
-    if(b.dataset.tab==="dash") renderDashboard();
     if(b.dataset.tab==="dynamic") runDynamic();
-    if(b.dataset.tab==="data") renderRepSummary();
-    if(b.dataset.tab==="compare") renderCompare();
-    if(b.dataset.tab==="overlap") renderOverlap();
     if(b.dataset.tab==="motion") renderMotion();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
 function refreshDoorPanels(){
   if(document.querySelector('.panel[data-tab="motion"].active')) renderMotion();
-  if(document.querySelector('.panel[data-tab="overlap"].active')) renderOverlap();
 }
 // ---- Project fields ----
 function bindProject(){
@@ -2569,9 +2478,9 @@ function openReport(){
 
 /* ====================== 7. INIT / EVENTS ====================== */
 function loadAllUi(){
-  loadProjectFields(); loadDoorFields(); loadDynamicFields(); loadDataFields();
+  loadProjectFields(); loadDoorFields(); loadDynamicFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
-  renderTpTable(); renderRepSummary();
+  renderTpTable();
   $("doorPct").value=project.view.doorPct;
   $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
@@ -2963,7 +2872,7 @@ function runSelfTests(){
 
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindData(); bindOverlap(); bindMotion(); bindCompare(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindMotion(); bindCanvas(); bindToolbar();
   loadAllUi(); recomputeAll();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
