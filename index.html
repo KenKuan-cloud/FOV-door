@@ -22,11 +22,12 @@
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:13px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-header{display:flex;align-items:center;gap:12px;padding:8px 14px;
+header{display:flex;align-items:center;gap:10px;padding:8px 14px;
   background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:15px;margin:0;font-weight:600}
 header .rev{color:var(--muted);font-size:11px}
 header .spacer{flex:1}
+.hbar-sep{width:1px;align-self:stretch;background:var(--line);margin:2px 4px}
 button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
   border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}
 button:hover{border-color:var(--accent)}
@@ -34,9 +35,15 @@ button.primary{background:var(--accent);color:#04121f;border-color:var(--accent)
 .layout{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 47px)}
 .side{background:var(--panel);border-right:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0}
-.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:6px;border-bottom:1px solid var(--line)}
-.tabs button{padding:5px 8px;font-size:11px}
+
+/* sidebar tabs — grouped */
+.tabs{display:flex;flex-wrap:wrap;gap:3px;padding:8px;border-bottom:1px solid var(--line);align-items:center}
+.tabs button{padding:5px 9px;font-size:11px}
 .tabs button.active{background:var(--accent);color:#04121f;border-color:var(--accent)}
+.tabgroup-label{width:100%;font-size:9px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);margin:6px 2px 1px}
+.tabgroup-label:first-child{margin-top:0}
+
 .panels{overflow-y:auto;padding:12px;flex:1;min-height:0}
 .panel{display:none}
 .panel.active{display:block}
@@ -49,12 +56,29 @@ button.primary{background:var(--accent);color:#04121f;border-color:var(--accent)
 .row{display:flex;gap:8px}
 .row .field{flex:1}
 .hint{color:var(--muted);font-size:11px;margin:6px 0 10px}
+/* fieldset-style grouping inside panels */
+.group{border:1px solid var(--line);border-radius:8px;padding:12px 10px 3px;
+  margin-bottom:14px;position:relative;background:rgba(255,255,255,.012)}
+.group-cap{position:absolute;top:-8px;left:9px;font-size:9px;font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--accent);
+  background:var(--panel);padding:0 6px}
+
 .main{display:flex;flex-direction:column;min-height:0}
-.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
-.toolbar .grp{display:flex;align-items:center;gap:6px}
+
+/* toolbar — two rows of labeled clusters */
+.toolbar{display:flex;flex-direction:column;gap:9px;
+  padding:12px 12px 8px;background:var(--panel);border-bottom:1px solid var(--line)}
+.tb-row{display:flex;align-items:stretch;gap:9px;flex-wrap:wrap}
+.tb-cluster{display:flex;align-items:center;gap:6px;position:relative;
+  border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:var(--panel2)}
+.tb-cap{position:absolute;top:-8px;left:8px;font-size:9px;font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--muted);
+  background:var(--panel);padding:0 5px}
+.tb-cluster label{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:3px}
+.grp{display:flex;align-items:center;gap:6px}
 .toolbar label{color:var(--muted);font-size:11px}
 #doorPct{width:150px}
+
 .canvas-wrap{position:relative;flex:1;min-height:0;background:#0a0d11;display:flex}
 .canvas-pane{position:relative;flex:1;min-width:0;min-height:0}
 #pane2{border-left:1px solid var(--line)}
@@ -65,8 +89,21 @@ canvas{display:block;width:100%;height:100%}
   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px}
 .legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
-.results{height:190px;background:var(--panel);border-top:1px solid var(--line);
-  overflow:auto}
+
+/* bottom tabbed dock */
+.dock{height:210px;background:var(--panel);border-top:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0}
+.dock-head{display:flex;align-items:center;gap:4px;padding:5px 8px;
+  border-bottom:1px solid var(--line);background:var(--panel2)}
+.dock-tab{font-size:11px;padding:4px 12px;border:1px solid transparent;
+  border-radius:6px 6px 0 0;cursor:pointer;color:var(--muted);background:none;margin-bottom:-6px}
+.dock-tab:hover{color:var(--ink);border-color:transparent}
+.dock-tab.active{color:var(--ink);background:var(--panel);border-color:var(--line);border-bottom-color:var(--panel)}
+.dock-spacer{flex:1}
+.dock-body{flex:1;overflow:auto;min-height:0}
+.dock-section{padding:6px 12px;font-size:11px}
+.dock-section strong{color:var(--accent);font-size:11px}
+
 table{border-collapse:collapse;width:100%;font-size:11px}
 th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;white-space:nowrap}
 th{position:sticky;top:0;background:var(--panel2);z-index:1}
@@ -83,10 +120,6 @@ td select,td input{background:var(--panel2);color:var(--ink);border:1px solid va
 .list-item .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .list-item .top strong{font-size:12px}
 .mini{font-size:10px;color:var(--muted)}
-.dash{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.stat{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px}
-.stat .n{font-size:20px;font-weight:700}
-.stat .l{font-size:10px;color:var(--muted);text-transform:uppercase}
 .danger{color:var(--red)}
 a.dl{color:var(--accent)}
 </style>
@@ -97,10 +130,12 @@ a.dl{color:var(--accent)}
   <span class="rev">WDS-FOV-SRS-001 · Phase 1 (Static FOV)</span>
   <span class="spacer"></span>
   <button onclick="newProject()">New</button>
-  <button onclick="importJson()">Open (JSON)</button>
-  <button onclick="exportJson()">Save (JSON)</button>
+  <button onclick="importJson()">Open</button>
+  <button onclick="exportJson()">Save</button>
+  <span class="hbar-sep"></span>
   <button onclick="exportCsv()">Export CSV</button>
   <button onclick="exportPng()">Export PNG</button>
+  <span class="hbar-sep"></span>
   <button class="primary" onclick="openReport()">Report</button>
 </header>
 
@@ -108,11 +143,14 @@ a.dl{color:var(--accent)}
   <!-- ------------------------- CONTROL PANEL ------------------------- -->
   <div class="side">
     <div class="tabs" id="tabs">
+      <span class="tabgroup-label">Setup</span>
       <button data-tab="project" class="active">Project</button>
       <button data-tab="door">Door</button>
       <button data-tab="sensor">Sensors</button>
-      <button data-tab="obstacle">Obstacles</button>
+      <button data-tab="obstacle">Objects</button>
+      <span class="tabgroup-label">Test</span>
       <button data-tab="test">Test Points</button>
+      <span class="tabgroup-label">Analysis</span>
       <button data-tab="motion">Motion</button>
       <button data-tab="dynamic">Dynamic</button>
     </div>
@@ -141,42 +179,51 @@ a.dl{color:var(--accent)}
         <p class="hint"><b>Front view (Y horizontal, Z up).</b> Falcon-/gullwing
           door hinged near the roof; it lifts up-and-out about the hinge in the
           Y&ndash;Z plane. LH = left door (right of screen from front); RH = right door (left of screen).</p>
-        <div class="row" style="align-items:center;margin-bottom:6px">
-          <span class="mini" style="margin-right:6px">Door side:</span>
-          <button id="d_sideLH" onclick="setDoorSide('LH')" style="min-width:48px">LH</button>
-          <button id="d_sideRH" onclick="setDoorSide('RH')" style="min-width:48px">RH</button>
-        </div>
-        <div class="row">
-          <div class="field"><label>Hinge Y (mm)</label><input id="d_hy" type="number"></div>
-          <div class="field"><label>Hinge Z / roof (mm)</label><input id="d_hz" type="number"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>Max opening angle (°)</label><input id="d_max" type="number"></div>
-          <div class="field"><label>Closed orientation (°)</label><input id="d_base" type="number"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>Door height (mm, report)</label><input id="d_h" type="number"></div>
-          <div class="field"><label>Hinge X (fore-aft, mm)</label><input id="d_hx" type="number"></div>
-        </div>
-        <div class="field"><label>Door length (fore-aft X, mm &mdash; used by top view)</label>
-          <input id="d_len" type="number"></div>
-        <div class="field"><label>Door outline &mdash; corner points, door-local
-          <b>Y,Z</b> per line (mm; hinge = 0,0)</label>
-          <textarea id="d_profile" rows="8" spellcheck="false"
-            style="font-family:monospace;font-size:11px"></textarea></div>
-        <button onclick="applyProfile()">Apply outline</button>
-        <div class="row" style="margin-top:10px;align-items:flex-end">
-          <div class="field"><label>Load preset</label>
-            <select id="d_presetSel" style="background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 5px;font-size:12px">
-              <option value="">— choose —</option>
-              <option value="wing">Wing door default</option>
-              <option value="p700r">P700 Right door</option>
-              <option value="p700l">P700 Left door</option>
-              <option value="p800r">P800 Right door</option>
-              <option value="p800l">P800 Left door</option>
-            </select>
+        <div class="group">
+          <span class="group-cap">Presets &amp; side</span>
+          <div class="row" style="align-items:flex-end">
+            <div class="field"><label>Load preset</label>
+              <select id="d_presetSel">
+                <option value="">— choose —</option>
+                <option value="wing">Wing door default</option>
+                <option value="p700r">P700 Right door</option>
+                <option value="p700l">P700 Left door</option>
+                <option value="p800r">P800 Right door</option>
+                <option value="p800l">P800 Left door</option>
+              </select>
+            </div>
+            <div class="field" style="flex:0 0 auto"><button onclick="loadDoorPreset()">Load</button></div>
           </div>
-          <div class="field"><button onclick="loadDoorPreset()">Load</button></div>
+          <div class="row" style="align-items:center;margin-bottom:9px">
+            <span class="mini" style="margin-right:6px">Door side:</span>
+            <button id="d_sideLH" onclick="setDoorSide('LH')" style="min-width:48px">LH</button>
+            <button id="d_sideRH" onclick="setDoorSide('RH')" style="min-width:48px">RH</button>
+          </div>
+        </div>
+        <div class="group">
+          <span class="group-cap">Geometry</span>
+          <div class="row">
+            <div class="field"><label>Hinge Y (mm)</label><input id="d_hy" type="number"></div>
+            <div class="field"><label>Hinge Z / roof (mm)</label><input id="d_hz" type="number"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Max opening angle (°)</label><input id="d_max" type="number"></div>
+            <div class="field"><label>Closed orientation (°)</label><input id="d_base" type="number"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Door height (mm, report)</label><input id="d_h" type="number"></div>
+            <div class="field"><label>Hinge X (fore-aft, mm)</label><input id="d_hx" type="number"></div>
+          </div>
+          <div class="field"><label>Door length (fore-aft X, mm &mdash; used by top view)</label>
+            <input id="d_len" type="number"></div>
+        </div>
+        <div class="group">
+          <span class="group-cap">Outline</span>
+          <div class="field"><label>Corner points, door-local
+            <b>Y,Z</b> per line (mm; hinge = 0,0)</label>
+            <textarea id="d_profile" rows="8" spellcheck="false"
+              style="font-family:monospace;font-size:11px"></textarea></div>
+          <button onclick="applyProfile()">Apply outline</button>
         </div>
         <p class="hint">Door positions 0–100% in 10% steps are generated
           automatically (11 positions, criterion&nbsp;4). Use the door slider above
@@ -211,29 +258,32 @@ a.dl{color:var(--accent)}
         <p class="hint">Enable “Add point on click”, then click the canvas — a test
           point is created at the current door position, and its in-FOV status
           (PASS/FAIL) is computed automatically. Points can also be added manually.</p>
-        <div class="field"><label>Obstacle type for new points</label>
-          <select id="tp_obs"></select></div>
-        <div class="row">
-          <div class="field"><label>X fore-aft (mm)</label><input id="tp_x" type="number" value="0"></div>
-          <div class="field"><label>Y horiz (mm)</label><input id="tp_y" type="number" value="-1600"></div>
-          <div class="field"><label>Z height (mm)</label><input id="tp_z" type="number" value="1000"></div>
+        <div class="group">
+          <span class="group-cap">Add single point</span>
+          <div class="field"><label>Obstacle type for new points</label>
+            <select id="tp_obs"></select></div>
+          <div class="row">
+            <div class="field"><label>X fore-aft (mm)</label><input id="tp_x" type="number" value="0"></div>
+            <div class="field"><label>Y horiz (mm)</label><input id="tp_y" type="number" value="-1600"></div>
+            <div class="field"><label>Z height (mm)</label><input id="tp_z" type="number" value="1000"></div>
+          </div>
+          <button onclick="addTestPointManual()">+ Add test point</button>
+          <button onclick="clearTestPoints()">Clear all</button>
         </div>
-        <button onclick="addTestPointManual()">+ Add test point (manual)</button>
-        <button onclick="clearTestPoints()">Clear all</button>
-        <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-          <p class="mini" style="color:var(--accent);margin-bottom:6px">Door-zone test set (21 points, P1–P21)</p>
+        <div class="group">
+          <span class="group-cap">Door-zone set (21 pts)</span>
           <div class="row" style="align-items:flex-end">
             <div class="field"><label>Object for these points</label>
               <select id="tpSetObs"></select></div>
-            <div class="field"><button class="primary" onclick="loadDoorZoneTestSet()">Load 21-point set</button></div>
+            <div class="field" style="flex:0 0 auto"><button class="primary" onclick="loadDoorZoneTestSet()">Load</button></div>
           </div>
           <div class="field"><label>X shift (mm, fore-aft — shifts all 21 points)</label>
             <input id="tpSetXShift" type="number" value="0" step="10" onchange="setTestSetXShift(this.value)"></div>
-          <p class="mini" style="color:var(--muted)">7×3 grid, z=0. Y measured outboard from the door edge (re-anchors per door). Loading replaces any existing P1–P21 points.</p>
+          <p class="mini" style="color:var(--muted)">7×3 grid P1–P21, z=0. Y measured outboard from the door edge (re-anchors per door). Loading replaces any existing P1–P21 points.</p>
         </div>
-        <p class="hint" style="margin-top:12px">Blind points (inside the door swept
+        <p class="hint">Blind points (inside the door swept
           envelope but outside the sensor FOV, criterion&nbsp;12) are highlighted red
-          in the table below.</p>
+          in the Test Points table below.</p>
       </div>
 
       <!-- Door-movement compensation / radar velocity (Phase 4, §13) -->
@@ -293,63 +343,75 @@ a.dl{color:var(--accent)}
   <!-- ------------------------- MAIN VIEW ------------------------- -->
   <div class="main">
     <div class="toolbar">
-      <div class="grp">
-        <label>View</label>
-        <select id="viewPlane">
-          <option value="front">Front (Y–Z)</option>
-          <option value="top">Top (X–Y)</option>
-          <option value="split">Split (Front + Top)</option>
-          <option value="3d">3D</option>
-        </select>
-        <span class="grp" id="cam3dGroup" style="display:none;gap:2px">
-          <button onclick="set3dPreset('iso')" title="Isometric">Iso</button>
-          <button onclick="set3dPreset('top')" title="Top">Top</button>
-          <button onclick="set3dPreset('front')" title="Front">Front</button>
-          <button onclick="set3dPreset('side')" title="Side">Side</button>
-          <button onclick="fit3d(false),render()" title="Fit to view">Fit</button>
-        </span>
+      <!-- Row 1: state & navigation -->
+      <div class="tb-row">
+        <div class="tb-cluster">
+          <span class="tb-cap">View</span>
+          <select id="viewPlane">
+            <option value="front">Front (Y–Z)</option>
+            <option value="top">Top (X–Y)</option>
+            <option value="split">Split (Front + Top)</option>
+            <option value="3d">3D</option>
+          </select>
+          <span class="grp" id="cam3dGroup" style="display:none;gap:2px">
+            <button onclick="set3dPreset('iso')" title="Isometric">Iso</button>
+            <button onclick="set3dPreset('top')" title="Top">Top</button>
+            <button onclick="set3dPreset('front')" title="Front">Front</button>
+            <button onclick="set3dPreset('side')" title="Side">Side</button>
+            <button onclick="fit3d(false),render()" title="Fit to view">Fit</button>
+          </span>
+          <button onclick="resetView()" title="Reset pan/zoom">Reset</button>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Door position</span>
+          <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
+          <span id="doorPctVal" class="mini">0%</span>
+          <input type="number" id="doorAngInput" min="-180" max="180" step="0.5" value="0"
+            title="Door angle (°) — type to set position"
+            style="width:58px;font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 4px">
+          <span class="mini">°</span>
+          <span id="doorTimeVal" class="mini"></span>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Playback</span>
+          <button onclick="animStep(-5)" title="Step back">⏮</button>
+          <button onclick="playAnim(-1)" title="Play closing">◀</button>
+          <button onclick="pauseAnim()" title="Pause">⏸</button>
+          <button onclick="playAnim(1)" title="Play opening">▶</button>
+          <button onclick="animStep(5)" title="Step forward">⏭</button>
+          <label>speed <input type="range" id="animSpeed" min="0.25" max="4" step="0.25" value="1" style="width:64px"></label>
+        </div>
       </div>
-      <div class="grp">
-        <label>Grid cell</label>
-        <button id="gridBtn100" class="primary" onclick="setGridCell(100)">10×10 cm</button>
-        <button id="gridBtn50" onclick="setGridCell(50)">5×5 cm</button>
-        <button id="gridBtn200" onclick="setGridCell(200)">20×20 cm</button>
-      </div>
-      <div class="grp">
-        <label>Heatmap</label>
-        <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
-        <button onclick="clearHeatmap()">Clear</button>
-        <label><input type="checkbox" id="showProxLines" checked onchange="const b=$('proxToggleBtn');if(b)b.textContent='Prox lines: '+(this.checked?'ON':'OFF');render()"> Proximity lines</label>
-      </div>
-      <div class="grp">
-        <label>Door position</label>
-        <input type="range" id="doorPct" min="0" max="100" step="1" value="0">
-        <span id="doorPctVal" class="mini">0%</span>
-        <input type="number" id="doorAngInput" min="-180" max="180" step="0.5" value="0"
-          title="Door angle (°) — type to set position"
-          style="width:60px;font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 4px">
-        <span class="mini">°</span>
-        <span id="doorTimeVal" class="mini"></span>
-      </div>
-      <div class="grp">
-        <button onclick="animStep(-5)" title="Step back">⏮</button>
-        <button onclick="playAnim(-1)" title="Play closing">◀</button>
-        <button onclick="pauseAnim()" title="Pause">⏸</button>
-        <button onclick="playAnim(1)" title="Play opening">▶</button>
-        <button onclick="animStep(5)" title="Step forward">⏭</button>
-        <label>speed <input type="range" id="animSpeed" min="0.25" max="4" step="0.25" value="1" style="width:70px"></label>
-      </div>
-      <div class="grp">
-        <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
-        <label><input type="checkbox" id="showGhost" checked> Swept FOV (feathers)</label>
-        <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
-        <label><input type="checkbox" id="clickAdd"> Add point on click</label>
-        <label><input type="checkbox" id="moveObs"> Move obstacle</label>
-        <select id="moveObsSel" style="font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 5px"></select>
-      </div>
-      <div class="grp">
-        <button onclick="resetView()">Reset view</button>
-        <span class="mini">wheel = zoom · drag = pan</span>
+      <!-- Row 2: display & tools -->
+      <div class="tb-row">
+        <div class="tb-cluster">
+          <span class="tb-cap">Grid</span>
+          <button id="gridBtn100" class="primary" onclick="setGridCell(100)">10×10</button>
+          <button id="gridBtn50" onclick="setGridCell(50)">5×5</button>
+          <button id="gridBtn200" onclick="setGridCell(200)">20×20</button>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Overlays</span>
+          <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
+          <label><input type="checkbox" id="showGhost" checked> Swept FOV</label>
+          <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Heatmap</span>
+          <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
+          <button onclick="clearHeatmap()">Clear</button>
+          <label><input type="checkbox" id="showProxLines" checked onchange="const b=$('proxToggleBtn');if(b)b.textContent='Prox lines: '+(this.checked?'ON':'OFF');render()"> Proximity lines</label>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Tools</span>
+          <label><input type="checkbox" id="clickAdd"> Add point on click</label>
+          <label><input type="checkbox" id="moveObs"> Move obstacle</label>
+          <select id="moveObsSel" style="font-size:11px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 5px"></select>
+        </div>
+        <div class="tb-cluster">
+          <span class="tb-cap">Navigate</span>
+          <span class="mini">wheel = zoom · drag = pan</span>
+        </div>
       </div>
     </div>
     <div class="canvas-wrap">
@@ -372,34 +434,38 @@ a.dl{color:var(--accent)}
         <div><span class="sw" style="background:var(--gray)"></span>Not tested</div>
       </div>
     </div>
-    <div class="results" id="resultsSection">
-      <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--line);background:var(--panel2)">
-        <button id="tpToggleBtn" onclick="toggleResultsTable()" style="font-size:10px;padding:2px 8px">Hide</button>
-        <span style="font-size:11px;color:var(--muted)">Test points</span>
+    <div class="dock" id="resultsSection">
+      <div class="dock-head">
+        <button class="dock-tab active" id="dockTabTp" onclick="setBottomTab('tp')">Test Points</button>
+        <button class="dock-tab" id="dockTabProx" onclick="setBottomTab('prox')">Proximity</button>
+        <span class="dock-spacer"></span>
+        <button id="dockHideBtn" onclick="toggleBottomDock()" style="font-size:10px;padding:2px 10px">Hide</button>
       </div>
-      <div id="tpTableWrap">
-      <table id="tpTable">
-        <thead><tr>
-          <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
-          <th>X</th><th>Y</th><th>Z</th><th>In FOV</th><th>Blind</th>
-          <th>Reps</th><th>Det.rate</th><th>Result</th><th>Comments</th><th></th>
-        </tr></thead>
-        <tbody id="tpBody"></tbody>
-      </table>
-      </div><!-- /tpTableWrap -->
-    </div>
-    <div id="distPanel" style="background:var(--panel2);border-top:1px solid var(--line);padding:6px 12px;font-size:11px;overflow-x:auto">
-      <strong style="color:var(--accent);font-size:11px">Proximity — sensor / door to obstacle</strong>
-      <table id="distTable" style="width:100%;margin-top:4px;border-collapse:collapse">
-        <thead><tr style="color:var(--muted)">
-          <th style="text-align:left;padding:2px 6px">Pair</th>
-          <th style="padding:2px 6px">Direct (mm)</th>
-          <th style="padding:2px 6px">ΔX fwd</th>
-          <th style="padding:2px 6px">ΔY lat</th>
-          <th style="padding:2px 6px">ΔZ up</th>
-        </tr></thead>
-        <tbody id="distBody"></tbody>
-      </table>
+      <div class="dock-body" id="dockBody">
+        <div id="tpTableWrap">
+          <table id="tpTable">
+            <thead><tr>
+              <th>ID</th><th>Door%</th><th>Sensor</th><th>Obstacle</th>
+              <th>X</th><th>Y</th><th>Z</th><th>In FOV</th><th>Blind</th>
+              <th>Reps</th><th>Det.rate</th><th>Result</th><th>Comments</th><th></th>
+            </tr></thead>
+            <tbody id="tpBody"></tbody>
+          </table>
+        </div><!-- /tpTableWrap -->
+        <div id="distWrap" style="display:none">
+          <div class="dock-section"><strong>Proximity — sensor / door to obstacle</strong></div>
+          <table id="distTable" style="width:100%;border-collapse:collapse">
+            <thead><tr style="color:var(--muted)">
+              <th style="text-align:left;padding:2px 8px">Pair</th>
+              <th style="padding:2px 8px">Direct (mm)</th>
+              <th style="padding:2px 8px">ΔX fwd</th>
+              <th style="padding:2px 8px">ΔY lat</th>
+              <th style="padding:2px 8px">ΔZ up</th>
+            </tr></thead>
+            <tbody id="distBody"></tbody>
+          </table>
+        </div><!-- /distWrap -->
+      </div>
     </div>
   </div>
 </div>
@@ -2517,6 +2583,25 @@ function toggleResultsTable(){
   // collapse the whole panel to just its header so the canvas area grows
   if(sect) sect.style.height=hidden?"":"auto";
   btn.textContent=hidden?"Hide":"Show";
+  render(); // refit canvas to the reclaimed space
+}
+// Bottom dock: switch between the Test Points and Proximity tables.
+function setBottomTab(name){
+  const isTp=name!=="prox";
+  const tp=$("tpTableWrap"), dp=$("distWrap");
+  if(tp) tp.style.display=isTp?"":"none";
+  if(dp) dp.style.display=isTp?"none":"";
+  const bt=$("dockTabTp"), bp=$("dockTabProx");
+  if(bt) bt.classList.toggle("active",isTp);
+  if(bp) bp.classList.toggle("active",!isTp);
+}
+// Bottom dock: collapse to just its header bar so the canvas area grows.
+function toggleBottomDock(){
+  const dock=$("resultsSection"), body=$("dockBody"), btn=$("dockHideBtn"); if(!dock||!body) return;
+  const hidden=body.style.display==="none";
+  body.style.display=hidden?"":"none";
+  dock.style.height=hidden?"":"auto";
+  if(btn) btn.textContent=hidden?"Hide":"Show";
   render(); // refit canvas to the reclaimed space
 }
 function toggleProxLines(){
