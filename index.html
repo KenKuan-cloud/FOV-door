@@ -231,6 +231,8 @@ a.dl{color:var(--accent)}
               <select id="tpSetObs"></select></div>
             <div class="field"><button class="primary" onclick="loadDoorZoneTestSet()">Load 21-point set</button></div>
           </div>
+          <div class="field"><label>X shift (mm, fore-aft — shifts all 21 points)</label>
+            <input id="tpSetXShift" type="number" value="0" step="10" onchange="setTestSetXShift(this.value)"></div>
           <p class="mini" style="color:var(--muted)">7×3 grid, z=0. Y measured outboard from the door edge (re-anchors per door). Loading replaces any existing P1–P21 points.</p>
         </div>
         <p class="hint" style="margin-top:12px">Blind points (inside the door swept
@@ -1820,6 +1822,7 @@ function loadProjectFields(){
   $("p_name").value=p.name; $("p_vehicle").value=p.vehicleModel;
   $("p_customer").value=p.customer; $("p_side").value=p.doorSide;
   $("p_by").value=p.preparedBy; $("p_date").value=p.testDate; $("p_notes").value=p.notes;
+  if($("tpSetXShift")) $("tpSetXShift").value=project.testSetXShift||0;
   syncDoorSideToggle();
 }
 // ---- Door fields ----
@@ -2023,12 +2026,20 @@ function doorEdgeY(){
 }
 function doorOutboardSign(){ return project.project.doorSide==="RH" ? 1 : -1; }
 // Re-anchor door-edge-relative test points to the current door (per-door update).
+// Y = door edge + outboard offset; X = base fore-aft + user X shift.
 function refreshDoorRelTestPoints(){
   if(!project||!project.testPoints) return;
-  const edge=doorEdgeY(), sign=doorOutboardSign();
+  const edge=doorEdgeY(), sign=doorOutboardSign(), xShift=project.testSetXShift||0;
   for(const tp of project.testPoints){
-    if(tp.doorRel) tp.y=Math.round(edge+sign*tp.yMag);
+    if(tp.doorRel){
+      tp.y=Math.round(edge+sign*tp.yMag);
+      if(tp.xBase!=null) tp.x=Math.round(tp.xBase+xShift);
+    }
   }
+}
+function setTestSetXShift(v){
+  project.testSetXShift=parseFloat(v)||0;
+  recomputeAll(); render();
 }
 function loadDoorZoneTestSet(){
   const obsId=($("tpSetObs")&&$("tpSetObs").value)
@@ -2036,10 +2047,10 @@ function loadDoorZoneTestSet(){
   // remove any previously loaded P# points so re-loading refreshes cleanly
   project.testPoints=project.testPoints.filter(t=>!/^P\d+$/.test(t.id));
   const doorPct=project.view.doorPct;
-  const edge=doorEdgeY(), sign=doorOutboardSign();
+  const edge=doorEdgeY(), sign=doorOutboardSign(), xShift=project.testSetXShift||0;
   for(const [id,x,mag] of DOOR_ZONE_TEST_SET){
-    const tp={ id, x, y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
-      doorRel:true, yMag:mag, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
+    const tp={ id, x:Math.round(x+xShift), y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
+      doorRel:true, yMag:mag, xBase:x, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
     project.testPoints.push(tp);
     evaluateTestPoint(tp);
   }
@@ -2696,8 +2707,33 @@ function zoom3dToCursor(canvas,e){
   v.target=V.add(v.target, V.add(V.scale(b.u, wx*(1-k)), V.scale(b.v, wy*(1-k)))); // keep cursor point fixed
   render();
 }
+// Nearest test point to a screen position in the 3D view (prefers the P1–P21
+// door-zone set; falls back to any test point). Returns the test point or null.
+function nearestTestPointScreen(sx,sy){
+  let pts=project.testPoints.filter(t=>/^P\d+$/.test(t.id));
+  if(!pts.length) pts=project.testPoints;
+  let best=null,bd=Infinity;
+  for(const tp of pts){
+    const q=project3D({x:tp.x,y:tp.y,z:tp.z});
+    const d=(q.x-sx)**2+(q.y-sy)**2;
+    if(d<bd){ bd=d; best=tp; }
+  }
+  return best;
+}
 function onCanvasDown(canvas,e){
   if(project.view.plane==="3d"){
+    // Move-obstacle mode: left-click snaps the selected object to the nearest
+    // of the 21 test points (same object motion as top view, but in 3D).
+    if($("moveObs") && $("moveObs").checked && e.button===0 && !e.shiftKey){
+      const o=project.obstacles.find(x=>x.id===$("moveObsSel").value);
+      if(o){
+        const r=canvas.getBoundingClientRect();
+        W=r.width; H=r.height; cur3B=cam3Basis();
+        const tp=nearestTestPointScreen(e.clientX-r.left, e.clientY-r.top);
+        if(tp){ o.x=tp.x; o.y=tp.y; renderObstacleList(); refreshMoveObsSelect(); render(); }
+      }
+      return;
+    }
     if(e.button===2 || e.shiftKey){ drag={mode:"pan3d", x:e.clientX, y:e.clientY}; }
     else { drag={mode:"orbit3d", x:e.clientX, y:e.clientY}; dragging3d=true; start3dLoop(); }
     return;
