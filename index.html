@@ -346,7 +346,7 @@ a.dl{color:var(--accent)}
         <div class="tb-cluster">
           <span class="tb-cap">Overlays</span>
           <label><input type="checkbox" id="showSwept"> Swept envelope</label>
-          <label><input type="checkbox" id="showGhost" checked> Swept FOV</label>
+          <label><input type="checkbox" id="showGhost"> Swept FOV</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
         </div>
         <div class="tb-cluster">
@@ -397,19 +397,13 @@ a.dl{color:var(--accent)}
       <div class="dock-body" id="dockBody">
         <div id="tpTableWrap">
           <table id="tpTable">
-            <thead><tr>
+            <thead id="tpHead"><tr>
               <th title="Unique test-point label">ID</th>
-              <th title="Door opening % this point was recorded/evaluated at">Door%</th>
+              <th title="Max door opening before contact with the associated obstacle">Door open</th>
               <th title="Which sensor (if any) currently covers this point">Sensor</th>
               <th title="Obstacle this point is associated with">Obstacle</th>
-              <th title="Fore-aft position (mm)">X</th>
-              <th title="Lateral / outboard position (mm)">Y</th>
-              <th title="Height above ground (mm)">Z</th>
               <th title="Inside at least one active sensor's field of view at this door %">In FOV</th>
               <th title="Inside the door swept envelope but not seen by any sensor (blind spot)">Blind</th>
-              <th title="Number of measured repetitions imported for this point">Reps</th>
-              <th title="Detection rate across the measured repetitions">Det.rate</th>
-              <th title="PASS / CONDITIONAL / FAIL — auto from FOV or from measured rate; editable">Result</th>
               <th>Comments</th><th></th>
             </tr></thead>
             <tbody id="tpBody"></tbody>
@@ -2070,28 +2064,44 @@ function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id
 
 function renderTpTable(){
   const body=$("tpBody"); body.innerHTML="";
+  const activeSensors=project.sensors.filter(s=>s.active);
+  const side=project.project.doorSide;
+  // Dynamic header: base columns + per-sensor proximity columns
+  const head=$("tpHead"); if(head){
+    let h=`<tr><th>ID</th><th title="Max door opening before contact with the associated obstacle">Door open</th>
+      <th>Sensor</th><th>Obstacle</th><th>In FOV</th><th>Blind</th>`;
+    activeSensors.forEach(s=>{ h+=`<th title="${s.id} direct distance (mm)">${s.id} dist</th><th title="${s.id} fore-aft gap">${s.id} ΔX</th>`; });
+    h+=`<th>Comments</th><th></th></tr>`;
+    head.innerHTML=h;
+  }
   project.testPoints.forEach(tp=>{
     const tr=document.createElement("tr");
     if(tp.blind) tr.className="blind";
-    const st=tpStats(tp);
-    const rb = tp.result==="PASS"?"b-pass":tp.result==="FAIL"?"b-fail":
-      tp.result==="CONDITIONAL PASS"?"b-cond":"b-nt";
+    const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
+    const c=obs?doorOpenBeforeContact(obs):{contact:false,pct:100,deg:0};
+    const cCol=c.contact?"var(--red)":"var(--green)";
+    const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
+    const openDeg=doorAngleForPercent(tp.doorPct,project.door,side);
+    let sensorCols="";
+    activeSensors.forEach(s=>{
+      const sp=sensorWorldPos(s,openDeg,side);
+      const pt={x:tp.x,y:tp.y,z:tp.z};
+      const d=distPointToObs(pt,{id:"tp",type:"Custom obstacle",x:tp.x,y:tp.y,z:tp.z,width:0,depth:0,height:0});
+      const sd=distPointToObs(sp,obs||{id:"",type:"Custom obstacle",x:tp.x,y:tp.y,z:tp.z,width:0,depth:0,height:0});
+      const sDist=Math.round(Math.sqrt((sp.x-tp.x)**2+(sp.y-tp.y)**2+(sp.z-tp.z)**2));
+      const sDx=Math.round(sp.x-tp.x);
+      const col=sDist<=(s.stopMm||300)?"var(--red)":sDist<=(s.warningMm||800)?"var(--yellow)":"var(--green)";
+      sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td><td style="text-align:right">${sDx}</td>`;
+    });
     tr.innerHTML=`
-      <td>${tp.id}</td><td>${tp.doorPct}%</td>
+      <td>${tp.id}</td>
+      <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
       <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
-      <td>${Math.round(tp.x)}</td><td>${Math.round(tp.y)}</td><td>${Math.round(tp.z)}</td>
       <td>${tp.inFov?"YES":"no"}</td>
       <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
-      <td>${st?st.n:"—"}</td>
-      <td>${st?st.rate.toFixed(0)+"%":"—"}</td>
-      <td><select data-k="result">
-        ${["","PASS","CONDITIONAL PASS","FAIL"].map(r=>`<option ${r===tp.result?"selected":""}>${r||"—"}</option>`).join("")}
-      </select></td>
+      ${sensorCols}
       <td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>
       <td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
-    tr.querySelector("[data-k='result']").addEventListener("change",e=>{
-      tp.result=e.target.value==="—"?"":e.target.value; tp._manual=true; render(); renderTpTable();
-    });
     tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
     body.appendChild(tr);
   });
