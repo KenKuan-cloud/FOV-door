@@ -353,7 +353,7 @@ a.dl{color:var(--accent)}
           <span class="tb-cap">Heatmap</span>
           <button onclick="computeHeatmap()" title="Colour grid by sensor detection zone (current door position)">Compute</button>
           <button onclick="clearHeatmap()">Clear</button>
-          <label><input type="checkbox" id="showProxLines" checked onchange="const b=$('proxToggleBtn');if(b)b.textContent='Prox lines: '+(this.checked?'ON':'OFF');render()"> Proximity lines</label>
+          <label><input type="checkbox" id="showProxLines" onchange="const b=$('proxToggleBtn');if(b)b.textContent='Prox lines: '+(this.checked?'ON':'OFF');render()"> Proximity lines</label>
         </div>
         <div class="tb-cluster">
           <span class="tb-cap">Tools</span>
@@ -373,7 +373,7 @@ a.dl{color:var(--accent)}
         <span class="pane-label" id="cvLabel"></span>
         <button id="proxToggleBtn" onclick="toggleProxLines()"
           title="Show/hide proximity lines"
-          style="position:absolute;top:6px;right:6px;font-size:10px;padding:3px 7px;opacity:0.82;z-index:10">Prox lines: ON</button>
+          style="position:absolute;top:6px;right:6px;font-size:10px;padding:3px 7px;opacity:0.82;z-index:10">Prox lines: OFF</button>
       </div>
       <div class="canvas-pane" id="pane2" style="display:none">
         <canvas id="cv2"></canvas>
@@ -1026,6 +1026,12 @@ function drawGrid(){
   ctx.fillText(top?"+X fwd":"+Y", ah.x-6, ah.y-6);
   ctx.fillText(top?"+Y left":"+Z up", av.x+6, av.y+4);
   ctx.beginPath(); ctx.arc(originS.x,originS.y,3,0,7); ctx.fill();
+  if(top){
+    ctx.font="bold 12px sans-serif"; ctx.textAlign="center";
+    ctx.fillStyle="rgba(77,163,255,.7)";
+    ctx.fillText("FRONT ▸", ah.x, ah.y+14);
+    ctx.fillText("◂ REAR", ah0.x, ah0.y+14);
+  }
 }
 function setGridCell(mm){
   gridCellMm=mm;
@@ -1431,6 +1437,10 @@ function draw3DScene(){
   const lx=project3D({x:1650,y:0,z:0}), ly=project3D({x:0,y:1650,z:0}), lz=project3D({x:0,y:0,z:1950});
   ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
   ctx.fillText("X",lx.x,lx.y); ctx.fillText("Y",ly.x,ly.y); ctx.fillText("Z up",lz.x,lz.y);
+  const lxf=project3D({x:2200,y:0,z:0}), lxr=project3D({x:-2200,y:0,z:0});
+  ctx.font="bold 12px sans-serif"; ctx.fillStyle="rgba(77,163,255,.7)"; ctx.textAlign="center";
+  ctx.fillText("FRONT",lxf.x,lxf.y-8); ctx.fillText("REAR",lxr.x,lxr.y-8);
+  ctx.textAlign="left";
   // collect depth-sorted faces: door prism + swept ghosts + FOV frustums + obstacles
   let faces=[];
   if($("showGhost").checked){
