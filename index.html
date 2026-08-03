@@ -25,14 +25,15 @@ body{margin:0;background:var(--bg);color:var(--ink);
 header{display:flex;align-items:center;gap:10px;padding:8px 14px;
   background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:15px;margin:0;font-weight:600}
-header .rev{color:var(--muted);font-size:11px}
 header .spacer{flex:1}
 .hbar-sep{width:1px;align-self:stretch;background:var(--line);margin:2px 4px}
 button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
   border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}
 button:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);color:#04121f;border-color:var(--accent);font-weight:600}
-.layout{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 47px)}
+.layout{display:grid;grid-template-columns:340px 4px 1fr;height:calc(100vh - 47px)}
+.resize-handle{background:var(--line);cursor:col-resize;position:relative;z-index:2}
+.resize-handle:hover,.resize-handle.active{background:var(--accent)}
 .side{background:var(--panel);border-right:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0}
 
@@ -122,12 +123,16 @@ td select,td input{background:var(--panel2);color:var(--ink);border:1px solid va
 .mini{font-size:10px;color:var(--muted)}
 .danger{color:var(--red)}
 a.dl{color:var(--accent)}
+.sensor-details{overflow:hidden;transition:max-height .2s ease}
+.sensor-details.collapsed{max-height:0!important}
+.sensor-toggle{cursor:pointer;font-size:10px;color:var(--muted);border:none;background:none;padding:2px 6px}
+.sensor-toggle:hover{color:var(--ink)}
+.field-note{color:var(--muted);font-size:10px;margin:-4px 0 8px;font-style:italic}
 </style>
 </head>
 <body>
 <header>
   <h1>Wing Door Sensor FOV Tool</h1>
-  <span class="rev">WDS-FOV-SRS-001 · Phase 1 (Static FOV)</span>
   <span class="spacer"></span>
   <button onclick="newProject()">New</button>
   <button onclick="importJson()">Open</button>
@@ -150,9 +155,6 @@ a.dl{color:var(--accent)}
       <button data-tab="obstacle">Objects</button>
       <span class="tabgroup-label">Test</span>
       <button data-tab="test">Test Points</button>
-      <span class="tabgroup-label">Analysis</span>
-      <button data-tab="motion">Motion</button>
-      <button data-tab="dynamic">Dynamic</button>
     </div>
     <div class="panels">
 
@@ -286,60 +288,11 @@ a.dl{color:var(--accent)}
           in the Test Points table below.</p>
       </div>
 
-      <!-- Door-movement compensation / radar velocity (Phase 4, §13) -->
-      <div class="panel" data-tab="motion">
-        <h2>Door-Movement Compensation (§13)</h2>
-        <p class="hint">The sensor rides the door, so it has an ego velocity
-          (ω × lever&nbsp;arm). A radar sees the obstacle relative to the moving
-          sensor; the sensor's radial ego velocity must be subtracted to recover
-          the true object velocity. Computed at the current door position.</p>
-        <div id="motionOmega" class="mini" style="margin-bottom:8px"></div>
-        <label class="mini"><input type="checkbox" id="showVel"> Show sensor velocity vectors (front view)</label>
-        <p class="hint" style="margin-top:10px">Enter the radar-measured relative
-          radial velocity per obstacle — <b>closing convention, + = approaching</b>.
-          Comp = Measured − Ego radial (§13). A stationary obstacle reads Measured ≈
-          +Ego, so its compensated velocity ≈ 0.</p>
-        <div id="motionResult" style="margin-top:6px"></div>
-      </div>
-
-      <!-- Dynamic door analysis (Phase 2) -->
-      <div class="panel" data-tab="dynamic">
-        <h2>Dynamic Door Analysis</h2>
-        <p class="hint">Sweeps the opening door and, for each obstacle, finds when
-          it first enters the sensor FOV vs. when the moving door would contact it
-          &mdash; then the available reaction time, system response time, and safety
-          margin (§12, §34).</p>
-        <div class="row">
-          <div class="field"><label>Door open time (s)</label><input id="d_open" type="number" step="0.1"></div>
-          <div class="field"><label>Door close time (s)</label><input id="d_close" type="number" step="0.1"></div>
-        </div>
-        <p class="mini" style="margin:4px 0;color:var(--accent)">System response chain (ms)</p>
-        <div class="row">
-          <div class="field"><label>Sensor</label><input id="t_sensor" type="number"></div>
-          <div class="field"><label>Comms</label><input id="t_comm" type="number"></div>
-          <div class="field"><label>ECU</label><input id="t_ecu" type="number"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>Motor</label><input id="t_motor" type="number"></div>
-          <div class="field"><label>Mech. stop</label><input id="t_mech" type="number"></div>
-          <div class="field"><label>Total</label><input id="t_total" type="number" disabled></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>Target margin (ms)</label><input id="t_target" type="number"></div>
-          <div class="field"><label>Min clearance (mm)</label><input id="t_clear" type="number"></div>
-          <div class="field"><label>Sweep step (%)</label><input id="t_step" type="number" step="0.1"></div>
-        </div>
-        <button class="primary" onclick="runDynamic()">Run dynamic analysis</button>
-        <label class="mini" style="margin-left:8px"><input type="checkbox" id="dynOverlay" checked> Show detect/contact on view</label>
-        <div id="dynResults" style="margin-top:12px"></div>
-        <canvas id="dynChart" width="300" height="150"
-          style="width:100%;height:150px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-top:8px"></canvas>
-        <p class="mini" id="dynChartCap" style="text-align:center"></p>
-      </div>
 
     </div>
   </div>
 
+  <div class="resize-handle" id="sidebarResize"></div>
   <!-- ------------------------- MAIN VIEW ------------------------- -->
   <div class="main">
     <div class="toolbar">
@@ -392,7 +345,7 @@ a.dl{color:var(--accent)}
         </div>
         <div class="tb-cluster">
           <span class="tb-cap">Overlays</span>
-          <label><input type="checkbox" id="showSwept" checked> Swept envelope</label>
+          <label><input type="checkbox" id="showSwept"> Swept envelope</label>
           <label><input type="checkbox" id="showGhost" checked> Swept FOV</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
         </div>
@@ -957,37 +910,6 @@ function computeConfigMetrics(cfg){
       measRate, minMargin, worst };
   });
 }
-/* ---- Phase 4: motion-compensation panel (§13) ---- */
-function bindMotion(){
-  $("showVel").addEventListener("change",render);
-}
-function renderMotion(){
-  const el=$("motionResult"); if(!el) return;
-  const wDegS=(doorOmegaRadPerS()*180/Math.PI);
-  $("motionOmega").innerHTML=`Door angular velocity ω = <b>${wDegS.toFixed(1)}°/s</b>
-    (${doorOmegaRadPerS().toFixed(3)} rad/s) from ${project.door.maxOpenDeg}° in
-    ${project.door.openTimeS}s · door at ${Math.round(project.view.doorPct)}%.`;
-  const rows=motionAnalysis(project.view.doorPct);
-  if(!rows.length){ el.innerHTML='<p class="mini">Need an active sensor and an obstacle.</p>'; return; }
-  const body=rows.map(r=>`<tr>
-    <td>${r.sensor}</td><td>${r.obstacle}</td>
-    <td>${Math.round(r.r)}</td>
-    <td>${r.speedMps.toFixed(2)}</td>
-    <td class="${r.egoMps>=0?'':'danger'}">${r.egoMps>=0?'+':''}${r.egoMps.toFixed(2)}</td>
-    <td><input data-obs="${r.obstacle}" class="measvel" type="number" step="0.1"
-      value="${r.measMps==null?'':r.measMps}" style="width:70px"></td>
-    <td>${r.compMps==null?'—':(r.compMps>=0?'+':'')+r.compMps.toFixed(2)}</td></tr>`).join("");
-  el.innerHTML=`<table>
-    <tr><th>Sensor</th><th>Obst</th><th>Lever mm</th><th>Ego speed m/s</th>
-      <th>Ego radial m/s</th><th>Measured m/s</th><th>Comp. m/s</th></tr>${body}</table>
-    <p class="mini">Ego radial: + = sensor closing on the obstacle (apparent
-      approach a radar must compensate). Comp = Measured − Ego radial.</p>`;
-  el.querySelectorAll(".measvel").forEach(inp=>inp.addEventListener("input",()=>{
-    const o=project.obstacles.find(x=>x.id===inp.dataset.obs);
-    if(o) o.measRelMps = inp.value===""?undefined:parseFloat(inp.value);
-    renderMotion();
-  }));
-}
 
 /* ====================== 4. RENDERING ======================
    Draw functions use the module-level "current target": ctx/W/H (the canvas
@@ -1345,8 +1267,6 @@ function drawScene(){
   drawDoor(openDeg,side,{fill:"rgba(230,237,243,.12)",stroke:"#e6edf3",lw:2});
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
-  drawDynamicOverlay(side);
-  drawVelocityVectors();
   drawObstacles();
   drawProximityLines();
   drawTestPoints();
@@ -1627,39 +1547,6 @@ function draw3DScene(){
     ctx.fillStyle=cssVar("--orange"); ctx.font="11px sans-serif";
     ctx.fillText(o.id+" ("+o.type+")",q.x+4,q.y); }
 }
-// Sensor ego-velocity vectors (magenta) at the current door position, front view.
-function drawVelocityVectors(){
-  if(curPlane!=="front" || !$("showVel") || !$("showVel").checked) return;
-  const scale=0.15; // px per (mm/s); arrows are indicative
-  for(const s of project.sensors){ if(!s.active) continue;
-    const v=sensorVelocity(s, project.view.doorPct);
-    const p=worldToScreen({x:v.pose.x, y:v.pose.y});
-    const t={x:p.x+v.x*scale, y:p.y-v.y*scale}; // screen: +Z up so subtract vy
-    ctx.strokeStyle="#e879f9"; ctx.lineWidth=2; ctx.beginPath();
-    ctx.moveTo(p.x,p.y); ctx.lineTo(t.x,t.y); ctx.stroke();
-    // arrowhead
-    const ang=Math.atan2(t.y-p.y, t.x-p.x);
-    ctx.beginPath(); ctx.moveTo(t.x,t.y);
-    ctx.lineTo(t.x-8*Math.cos(ang-0.4), t.y-8*Math.sin(ang-0.4));
-    ctx.lineTo(t.x-8*Math.cos(ang+0.4), t.y-8*Math.sin(ang+0.4));
-    ctx.closePath(); ctx.fillStyle="#e879f9"; ctx.fill();
-  }
-}
-// Multi-sensor overlap heatmap (front view). Cached by door position.
-// Mark first-detection and first-contact door positions from the last run.
-function drawDynamicOverlay(side){
-  if(!dynLast || !$("dynOverlay") || !$("dynOverlay").checked) return;
-  for(const r of dynLast){
-    if(r.detectPct!=null){
-      drawDoor(doorAngleForPercent(r.detectPct,project.door,side),side,
-        {stroke:"rgba(57,211,83,.9)",lw:2});
-    }
-    if(r.contactPct!=null){
-      drawDoor(doorAngleForPercent(r.contactPct,project.door,side),side,
-        {stroke:"rgba(248,81,73,.9)",lw:2});
-    }
-  }
-}
 
 /* ====================== 5. UI PANELS / BINDING ====================== */
 function $(id){return document.getElementById(id);}
@@ -1668,14 +1555,10 @@ function bindTabs(){
     const b=e.target.closest("button"); if(!b) return;
     document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
-    if(b.dataset.tab==="dynamic") runDynamic();
-    if(b.dataset.tab==="motion") renderMotion();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
-function refreshDoorPanels(){
-  if(document.querySelector('.panel[data-tab="motion"].active')) renderMotion();
-}
+function refreshDoorPanels(){}
 // ---- Project fields ----
 function bindProject(){
   const map={p_name:"name",p_vehicle:"vehicleModel",p_customer:"customer",
@@ -1753,6 +1636,7 @@ function removeSensor(id){
 function renderSensorList(){
   const el=$("sensorList"); el.innerHTML="";
   project.sensors.forEach(s=>{
+    const collapsed=s._uiCollapsed!==false;
     const d=document.createElement("div"); d.className="list-item";
     d.innerHTML=`
       <div class="top"><strong>${s.id}</strong>
@@ -1760,12 +1644,10 @@ function renderSensorList(){
           <label class="mini"><input type="checkbox" ${s.active?"checked":""} data-k="active"> active</label>
           <label class="mini"><input type="checkbox" ${s.showFov===false?"":"checked"} data-k="showFov"> FOV</label>
           <input type="color" data-k="color" value="${s.color||'#4da3ff'}" title="Sensor color" style="width:28px;height:22px;padding:1px 2px;border:none;background:none;cursor:pointer;vertical-align:middle">
+          <button class="sensor-toggle" data-toggle="details">${collapsed?"▶ Show":"▼ Hide"}</button>
           <button onclick="removeSensor('${s.id}')">✕</button></span></div>
       <div class="field"><label>Name</label><input data-k="name" value="${s.name}"></div>
-      <div class="row">
-        <div class="field"><label>Type</label><select data-k="type">${
-          SENSOR_TYPES.map(t=>`<option ${t===s.type?"selected":""}>${t}</option>`).join("")}</select></div>
-      </div>
+      <div class="sensor-details${collapsed?" collapsed":""}" style="max-height:${collapsed?0:600}px">
       <div class="row">
         <div class="field"><label>Pos Y local</label><input type="number" data-k="posY" value="${s.posY}"></div>
         <div class="field"><label>Pos Z local</label><input type="number" data-k="posZ" value="${s.posZ}"></div>
@@ -1786,7 +1668,15 @@ function renderSensorList(){
       <div class="row">
         <div class="field"><label>Warning (mm)</label><input type="number" data-k="warningMm" value="${s.warningMm}"></div>
         <div class="field"><label>Stop (mm)</label><input type="number" data-k="stopMm" value="${s.stopMm}"></div>
+      </div>
       </div>`;
+    d.querySelector("[data-toggle=details]").addEventListener("click",function(){
+      const det=d.querySelector(".sensor-details");
+      const isCol=det.classList.contains("collapsed");
+      det.style.maxHeight=isCol?det.scrollHeight+"px":"0";
+      det.classList.toggle("collapsed"); s._uiCollapsed=!isCol;
+      this.textContent=isCol?"▼ Hide":"▶ Show";
+    });
     d.querySelectorAll("[data-k]").forEach(inp=>{
       inp.addEventListener("input",()=>{
         const k=inp.dataset.k;
@@ -1817,11 +1707,13 @@ function renderObstacleList(){
       <div class="top"><strong>${o.id}</strong><button onclick="removeObstacle('${o.id}')">✕</button></div>
       <div class="field"><label>Type</label><select data-k="type">${
         OBSTACLE_TYPES.map(t=>`<option ${t===o.type?"selected":""}>${t}</option>`).join("")}</select></div>
+      <p class="field-note">Position — vehicle frame origin</p>
       <div class="row">
         <div class="field"><label>X fore-aft (mm)</label><input type="number" data-k="x" value="${o.x}"></div>
         <div class="field"><label>Y lateral (mm)</label><input type="number" data-k="y" value="${o.y}"></div>
         <div class="field"><label>Z bottom (mm)</label><input type="number" data-k="z" value="${o.z}"></div>
       </div>
+      <p class="field-note">Object size — bounding box dimensions</p>
       <div class="row">
         <div class="field"><label>Width (Y mm)</label><input type="number" data-k="width" value="${o.width}"></div>
         <div class="field"><label>Depth (X mm)</label><input type="number" data-k="depth" value="${o.depth||200}"></div>
@@ -2372,7 +2264,7 @@ function openReport(){
 
 /* ====================== 7. INIT / EVENTS ====================== */
 function loadAllUi(){
-  loadProjectFields(); loadDoorFields(); loadDynamicFields();
+  loadProjectFields(); loadDoorFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
   renderTpTable();
   $("doorPct").value=project.view.doorPct;
@@ -2411,22 +2303,6 @@ function toggleProxLines(){
   cb.checked=!cb.checked;
   const btn=$("proxToggleBtn"); if(btn) btn.textContent="Prox lines: "+(cb.checked?"ON":"OFF");
   render();
-}
-function loadDynamicFields(){
-  const d=project.door, t=project.timing;
-  $("d_open").value=d.openTimeS; $("d_close").value=d.closeTimeS;
-  $("t_sensor").value=t.sensorMs; $("t_comm").value=t.commMs; $("t_ecu").value=t.ecuMs;
-  $("t_motor").value=t.motorMs; $("t_mech").value=t.mechMs; $("t_total").value=totalResponseMs(t);
-  $("t_target").value=t.targetMarginMs; $("t_clear").value=t.minClearanceMm; $("t_step").value=t.gridStepPct;
-}
-function bindDynamic(){
-  const dmap={d_open:"openTimeS",d_close:"closeTimeS"};
-  for(const id in dmap) $(id).addEventListener("input",()=>{
-    project.door[dmap[id]]=parseFloat($(id).value)||0; updateDoorPctLabel(); });
-  const tmap={t_sensor:"sensorMs",t_comm:"commMs",t_ecu:"ecuMs",t_motor:"motorMs",
-    t_mech:"mechMs",t_target:"targetMarginMs",t_clear:"minClearanceMm",t_step:"gridStepPct"};
-  for(const id in tmap) $(id).addEventListener("input",()=>{
-    project.timing[tmap[id]]=parseFloat($(id).value)||0; $("t_total").value=totalResponseMs(); });
 }
 function newProject(){
   if(!confirm("Start a new project? Unsaved data will be lost.")) return;
@@ -2576,7 +2452,6 @@ function bindToolbar(){
     setDoorPct(pct);
   });
   ["showSwept","showGhost","showMeasured"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
-  $("dynOverlay").addEventListener("change",render);
   $("viewPlane").addEventListener("change",()=>setViewPlane($("viewPlane").value));
 }
 
@@ -2603,71 +2478,6 @@ function playAnim(dir){
   },20);
 }
 
-/* ---- Dynamic analysis run + rendering (Phase 2) ---- */
-let dynLast=null; // cached results for overlay
-function runDynamic(){
-  dynLast=analyzeAll();
-  renderDynamicResults(dynLast);
-  render();
-}
-function fmtMs(v){ return v==null?"—":Math.round(v)+" ms"; }
-function fmtPct(v){ return v==null?"—":v.toFixed(1)+"%"; }
-function clsBadge(cls){
-  const m={PASS:"b-pass","NO CONTACT":"b-pass",MARGINAL:"b-cond",
-    FAIL:"b-fail","NOT DETECTED":"b-fail"};
-  return `<span class="badge ${m[cls]||'b-nt'}">${cls}</span>`;
-}
-function renderDynamicResults(res){
-  const el=$("dynResults");
-  if(!res.length){ el.innerHTML='<p class="mini">No obstacles defined.</p>'; return; }
-  let h='<table><tr><th>Obst</th><th>Detect</th><th>Contact</th><th>Min clr</th>'
-    +'<th>React</th><th>Sys</th><th>Margin</th><th>Verdict</th></tr>';
-  for(const r of res){
-    h+=`<tr><td>${r.id}</td>`
-      +`<td>${fmtPct(r.detectPct)}${r.detectTimeMs!=null?'<br><span class="mini">'+(r.detectTimeMs/1000).toFixed(2)+'s</span>':''}</td>`
-      +`<td>${r.contacts?fmtPct(r.contactPct)+'<br><span class="mini">'+(r.contactTimeMs/1000).toFixed(2)+'s</span>':'—'}</td>`
-      +`<td>${isFinite(r.minClear)?Math.round(r.minClear)+' mm':'—'}</td>`
-      +`<td>${fmtMs(r.reactionMs)}</td><td>${fmtMs(r.sysMs)}</td>`
-      +`<td class="${r.marginMs!=null&&r.marginMs<0?'danger':''}">${fmtMs(r.marginMs)}</td>`
-      +`<td>${clsBadge(r.cls)}</td></tr>`;
-  }
-  h+='</table>';
-  el.innerHTML=h;
-  drawDynChart(res[0]);
-}
-// Min door-obstacle clearance vs door% for the first obstacle.
-function drawDynChart(r){
-  const c=$("dynChart"), x=c.getContext("2d");
-  const w=c.width=c.clientWidth||300, hh=c.height;
-  x.clearRect(0,0,w,hh);
-  if(!r||!r.profile.length){ return; }
-  const pad=24, vals=r.profile.map(p=>p.clearance);
-  const vmin=Math.min(0,...vals), vmax=Math.max(...vals,10);
-  const X=pct=>pad+(w-2*pad)*pct/100;
-  const Y=v=>hh-pad-(hh-2*pad)*(v-vmin)/(vmax-vmin||1);
-  // zero line
-  x.strokeStyle="#3a4757"; x.lineWidth=1; x.beginPath();
-  x.moveTo(pad,Y(0)); x.lineTo(w-pad,Y(0)); x.stroke();
-  x.fillStyle="#93a1b0"; x.font="9px sans-serif";
-  x.fillText("clearance (mm)",pad,10); x.fillText("0",4,Y(0)+3);
-  x.fillText("door %",w-42,hh-6);
-  // clearance curve
-  x.strokeStyle="#4da3ff"; x.lineWidth=1.5; x.beginPath();
-  r.profile.forEach((p,i)=>{ const px=X(p.pct),py=Y(p.clearance); i?x.lineTo(px,py):x.moveTo(px,py); });
-  x.stroke();
-  // in-FOV band (green ticks along bottom where detected)
-  x.strokeStyle="#39d353"; x.lineWidth=2; x.beginPath();
-  r.profile.forEach(p=>{ if(p.inFov){ x.moveTo(X(p.pct),hh-pad+6); x.lineTo(X(p.pct),hh-pad+10); } });
-  x.stroke();
-  // detect + contact markers
-  const mark=(pct,col,lbl)=>{ if(pct==null)return; x.strokeStyle=col; x.setLineDash([3,3]);
-    x.beginPath(); x.moveTo(X(pct),pad-4); x.lineTo(X(pct),hh-pad); x.stroke(); x.setLineDash([]);
-    x.fillStyle=col; x.fillText(lbl,X(pct)+2,pad+6); };
-  mark(r.detectPct,"#39d353","det");
-  mark(r.contactPct,"#f85149","contact");
-  $("dynChartCap").textContent="Door–obstacle clearance vs opening % ("+r.id
-    +"). Green ticks = obstacle in FOV.";
-}
 
 /* ---- §27 validation self-tests, wing-door front view (Y-Z) ---- */
 function runSelfTests(){
@@ -2756,10 +2566,28 @@ function runSelfTests(){
   console.groupEnd();
 }
 
+function bindSidebarResize(){
+  const handle=$("sidebarResize"), layout=document.querySelector(".layout");
+  if(!handle||!layout) return;
+  let dragging=false, startX=0, startW=0;
+  handle.addEventListener("mousedown",e=>{
+    e.preventDefault(); dragging=true; startX=e.clientX; handle.classList.add("active");
+    startW=document.querySelector(".side").getBoundingClientRect().width;
+  });
+  window.addEventListener("mousemove",e=>{
+    if(!dragging) return;
+    const w=Math.max(200,Math.min(600, startW+(e.clientX-startX)));
+    layout.style.gridTemplateColumns=w+"px 4px 1fr";
+    render();
+  });
+  window.addEventListener("mouseup",()=>{ if(dragging){ dragging=false; handle.classList.remove("active"); } });
+}
 function init(){
   project=defaultProject(); seq={s:1,o:1,t:0};
-  bindTabs(); bindProject(); bindDoor(); bindDynamic(); bindMotion(); bindCanvas(); bindToolbar();
+  bindTabs(); bindProject(); bindDoor(); bindCanvas(); bindToolbar();
+  bindSidebarResize();
   loadAllUi(); recomputeAll();
+  toggleBottomDock();
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
   runSelfTests();
