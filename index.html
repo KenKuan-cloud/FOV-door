@@ -92,7 +92,7 @@ canvas{display:block;width:100%;height:100%}
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
 
 /* bottom tabbed dock */
-.dock{height:210px;background:var(--panel);border-top:1px solid var(--line);
+.dock{height:auto;background:var(--panel);border-top:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0}
 .dock-head{display:flex;align-items:center;gap:4px;padding:5px 8px;
   border-bottom:1px solid var(--line);background:var(--panel2)}
@@ -362,6 +362,7 @@ a.dl{color:var(--accent)}
           <label><input type="checkbox" id="showSwept"> Swept envelope</label>
           <label><input type="checkbox" id="showGhost"> Swept FOV</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
+          <label><input type="checkbox" id="showTpIds"> Point IDs</label>
         </div>
         <div class="tb-cluster">
           <span class="tb-cap">Heatmap</span>
@@ -1161,6 +1162,10 @@ function drawTestPoints(){
     ctx.fillStyle=col; ctx.fill();
     if(tp.blind){ ctx.strokeStyle=cssVar("--red"); ctx.lineWidth=2;
       ctx.beginPath(); ctx.arc(q.x,q.y,8,0,7); ctx.stroke(); }
+    if($("showTpIds")&&$("showTpIds").checked){
+      ctx.fillStyle=cssVar("--fg"); ctx.font="10px sans-serif";
+      ctx.fillText(tp.id,q.x+7,q.y+3);
+    }
   }
 }
 function drawProximityLines(){
@@ -1532,6 +1537,11 @@ function draw3DScene(){
     const col=tp.result==="PASS"?cssVar("--green"):tp.result==="FAIL"?cssVar("--red")
       :tp.result==="CONDITIONAL PASS"?cssVar("--yellow"):cssVar("--gray");
     dot3({x:tp.x,y:tp.y,z:tp.z},4,col);
+    if($("showTpIds")&&$("showTpIds").checked){
+      const q=project3D({x:tp.x,y:tp.y,z:tp.z});
+      ctx.fillStyle=cssVar("--fg"); ctx.font="10px sans-serif";
+      ctx.fillText(tp.id,q.x+6,q.y-4);
+    }
   }
   // obstacle labels — anchored above each object's top
   for(const o of project.obstacles){
@@ -2049,13 +2059,11 @@ function tpRowHtml(tp, activeSensors, side){
   return `<td>${tp.id}</td>
     <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
     <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
-    <td>${tp.inFov?"YES":"no"}</td>
-    <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
     ${sensorCols}`;
 }
 function tpHeaderHtml(activeSensors){
   let h=`<tr><th>ID</th><th title="Max door opening before contact with obstacle placed at this point">Door open</th>
-    <th>Sensor</th><th>Obstacle</th><th>In FOV</th><th>Blind</th>`;
+    <th>Sensor</th><th>Obstacle</th>`;
   activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th><th title="${s.id} fore-aft gap">${s.id} ΔX</th>`; });
   return h;
 }
@@ -2458,7 +2466,7 @@ function bindToolbar(){
     const pct=Math.max(0,Math.min(100, Math.abs(ang)/maxDeg*100));
     setDoorPct(pct);
   });
-  ["showSwept","showGhost","showMeasured"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
+  ["showSwept","showGhost","showMeasured","showTpIds"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("viewPlane").addEventListener("change",()=>setViewPlane($("viewPlane").value));
 }
 
