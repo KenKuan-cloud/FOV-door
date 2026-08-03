@@ -155,6 +155,7 @@ a.dl{color:var(--accent)}
       <button data-tab="obstacle">Objects</button>
       <span class="tabgroup-label">Test</span>
       <button data-tab="test">Test Points</button>
+      <button data-tab="results">Results</button>
     </div>
     <div class="panels">
 
@@ -285,9 +286,22 @@ a.dl{color:var(--accent)}
         </div>
         <p class="hint">Blind points (inside the door swept
           envelope but outside the sensor FOV, criterion&nbsp;12) are highlighted red
-          in the Test Points table below.</p>
+          in the results table.</p>
       </div>
 
+      <!-- Results: full test-point table -->
+      <div class="panel" data-tab="results">
+        <h2>Test Point Results</h2>
+        <p class="hint">Door open = max door opening before the door contacts the obstacle
+          placed at each test point location. Per-sensor columns show the distance from
+          each sensor to that point at the current door position.</p>
+        <div id="resultsTableWrap" style="overflow-x:auto">
+          <table id="resultsTable" style="font-size:11px">
+            <thead id="resultsHead"></thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+      </div>
 
     </div>
   </div>
@@ -389,40 +403,15 @@ a.dl{color:var(--accent)}
     </div>
     <div class="dock" id="resultsSection">
       <div class="dock-head">
-        <button class="dock-tab active" id="dockTabTp" onclick="setBottomTab('tp')">Test Points</button>
-        <button class="dock-tab" id="dockTabProx" onclick="setBottomTab('prox')">Proximity</button>
+        <span class="dock-section" id="dockTitle" style="padding:0;margin:0;font-size:11px"><strong>Current position</strong></span>
         <span class="dock-spacer"></span>
         <button id="dockHideBtn" onclick="toggleBottomDock()" style="font-size:10px;padding:2px 10px">Hide</button>
       </div>
       <div class="dock-body" id="dockBody">
-        <div id="tpTableWrap">
-          <table id="tpTable">
-            <thead id="tpHead"><tr>
-              <th title="Unique test-point label">ID</th>
-              <th title="Max door opening before contact with the associated obstacle">Door open</th>
-              <th title="Which sensor (if any) currently covers this point">Sensor</th>
-              <th title="Obstacle this point is associated with">Obstacle</th>
-              <th title="Inside at least one active sensor's field of view at this door %">In FOV</th>
-              <th title="Inside the door swept envelope but not seen by any sensor (blind spot)">Blind</th>
-              <th>Comments</th><th></th>
-            </tr></thead>
-            <tbody id="tpBody"></tbody>
-          </table>
-        </div><!-- /tpTableWrap -->
-        <div id="distWrap" style="display:none">
-          <div class="dock-section"><strong>Proximity — sensor / door to obstacle</strong></div>
-          <table id="distTable" style="width:100%;border-collapse:collapse">
-            <thead><tr style="color:var(--muted)">
-              <th style="text-align:left;padding:2px 8px">Pair</th>
-              <th style="padding:2px 8px">Direct (mm)</th>
-              <th style="padding:2px 8px">ΔX fwd</th>
-              <th style="padding:2px 8px">ΔY lat</th>
-              <th style="padding:2px 8px">ΔZ up</th>
-              <th style="padding:2px 8px" title="Door opening (% and angle) at which the door first touches the object. If the door never reaches it, shows the max open angle.">Open @ contact</th>
-            </tr></thead>
-            <tbody id="distBody"></tbody>
-          </table>
-        </div><!-- /distWrap -->
+        <table id="dockTable" style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead id="dockHead"></thead>
+          <tbody id="dockBody2"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -1559,6 +1548,7 @@ function bindTabs(){
     const b=e.target.closest("button"); if(!b) return;
     document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
+    if(b.dataset.tab==="results") renderTpTable();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
@@ -2031,78 +2021,85 @@ function doorOpenBeforeContact(o){
   return {contact:false, pct:100, deg:maxDeg};
 }
 
-function updateDistPanel(){
-  const body=$("distBody"); if(!body||!project) return;
-  const pct=project.view.doorPct;
-  const side=project.project.doorSide;
-  const openDeg=doorAngleForPercent(pct,project.door,side);
-  const rows=[];
-  const fmt=(v,unit="")=>`<td style="text-align:right;padding:2px 6px">${v}${unit}</td>`;
-  for(const s of project.sensors){
-    if(!s.active) continue;
-    const sp=sensorWorldPos(s,openDeg,side);
-    for(const o of project.obstacles){
-      const d=distPointToObs(sp,o);
-      const col=d.dist<(s.stopMm||300)?"var(--red)":d.dist<(s.warningMm||800)?"var(--yellow)":"var(--green)";
-      rows.push(`<tr><td style="padding:2px 6px"><span style="color:${col}">●</span> ${s.id}→${o.id}</td>
-        ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dy)}${fmt(d.dz)}${fmt("—")}</tr>`);
-    }
-  }
-  for(const o of project.obstacles){
-    const d=distDoorToObs(o,openDeg,side);
-    const c=doorOpenBeforeContact(o);
-    const cCol=c.contact?"var(--red)":"var(--green)";
-    const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
-    rows.push(`<tr><td style="padding:2px 6px;color:var(--muted)">Door→${o.id}</td>
-      ${fmt(d.dist,"mm")}${fmt(d.dx)}${fmt(d.dyz+" Y-Z")}${fmt("—")}
-      <td style="text-align:right;padding:2px 6px;color:${cCol}" title="${c.contact?'Door contacts the object at this opening':'Door never reaches the object; max opening shown'}">${cTxt}</td></tr>`);
-  }
-  body.innerHTML=rows.join("") || `<tr><td colspan="6" style="padding:4px 6px;color:var(--muted)">No sensors or obstacles</td></tr>`;
-}
+function updateDistPanel(){ renderDockTable(); }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
 
 
+// Door-open-before-contact with the obstacle placed at a test point location.
+function doorOpenAtPoint(tp){
+  const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
+  if(!obs) return {contact:false,pct:100,deg:0};
+  const virtualObs={...obs, x:tp.x, y:tp.y, z:tp.z};
+  return doorOpenBeforeContact(virtualObs);
+}
+// Build one row of test-point data (shared by sidebar Results table and bottom dock).
+function tpRowHtml(tp, activeSensors, side){
+  const c=doorOpenAtPoint(tp);
+  const cCol=c.contact?"var(--red)":"var(--green)";
+  const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
+  const openDeg=doorAngleForPercent(tp.doorPct,project.door,side);
+  let sensorCols="";
+  activeSensors.forEach(s=>{
+    const sp=sensorWorldPos(s,openDeg,side);
+    const sDist=Math.round(Math.sqrt((sp.x-tp.x)**2+(sp.y-tp.y)**2+(sp.z-tp.z)**2));
+    const sDx=Math.round(sp.x-tp.x);
+    const col=sDist<=(s.stopMm||300)?"var(--red)":sDist<=(s.warningMm||800)?"var(--yellow)":"var(--green)";
+    sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td><td style="text-align:right">${sDx}</td>`;
+  });
+  return `<td>${tp.id}</td>
+    <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
+    <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
+    <td>${tp.inFov?"YES":"no"}</td>
+    <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
+    ${sensorCols}`;
+}
+function tpHeaderHtml(activeSensors){
+  let h=`<tr><th>ID</th><th title="Max door opening before contact with obstacle placed at this point">Door open</th>
+    <th>Sensor</th><th>Obstacle</th><th>In FOV</th><th>Blind</th>`;
+  activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th><th title="${s.id} fore-aft gap">${s.id} ΔX</th>`; });
+  return h;
+}
+// Full table in sidebar Results panel.
 function renderTpTable(){
-  const body=$("tpBody"); body.innerHTML="";
   const activeSensors=project.sensors.filter(s=>s.active);
   const side=project.project.doorSide;
-  // Dynamic header: base columns + per-sensor proximity columns
-  const head=$("tpHead"); if(head){
-    let h=`<tr><th>ID</th><th title="Max door opening before contact with the associated obstacle">Door open</th>
-      <th>Sensor</th><th>Obstacle</th><th>In FOV</th><th>Blind</th>`;
-    activeSensors.forEach(s=>{ h+=`<th title="${s.id} direct distance (mm)">${s.id} dist</th><th title="${s.id} fore-aft gap">${s.id} ΔX</th>`; });
-    h+=`<th>Comments</th><th></th></tr>`;
-    head.innerHTML=h;
-  }
+  const head=$("resultsHead");
+  if(head) head.innerHTML=tpHeaderHtml(activeSensors)+`<th>Comments</th><th></th></tr>`;
+  const body=$("resultsBody"); if(!body) return; body.innerHTML="";
   project.testPoints.forEach(tp=>{
     const tr=document.createElement("tr");
     if(tp.blind) tr.className="blind";
-    const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
-    const c=obs?doorOpenBeforeContact(obs):{contact:false,pct:100,deg:0};
-    const cCol=c.contact?"var(--red)":"var(--green)";
-    const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
-    const openDeg=doorAngleForPercent(tp.doorPct,project.door,side);
-    let sensorCols="";
-    activeSensors.forEach(s=>{
-      const sp=sensorWorldPos(s,openDeg,side);
-      const pt={x:tp.x,y:tp.y,z:tp.z};
-      const d=distPointToObs(pt,{id:"tp",type:"Custom obstacle",x:tp.x,y:tp.y,z:tp.z,width:0,depth:0,height:0});
-      const sd=distPointToObs(sp,obs||{id:"",type:"Custom obstacle",x:tp.x,y:tp.y,z:tp.z,width:0,depth:0,height:0});
-      const sDist=Math.round(Math.sqrt((sp.x-tp.x)**2+(sp.y-tp.y)**2+(sp.z-tp.z)**2));
-      const sDx=Math.round(sp.x-tp.x);
-      const col=sDist<=(s.stopMm||300)?"var(--red)":sDist<=(s.warningMm||800)?"var(--yellow)":"var(--green)";
-      sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td><td style="text-align:right">${sDx}</td>`;
-    });
-    tr.innerHTML=`
-      <td>${tp.id}</td>
-      <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
-      <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
-      <td>${tp.inFov?"YES":"no"}</td>
-      <td>${tp.blind?'<span class="badge b-fail">BLIND</span>':""}</td>
-      ${sensorCols}
-      <td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>
-      <td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
+    tr.innerHTML=tpRowHtml(tp,activeSensors,side)
+      +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
+      +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
     tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
+    body.appendChild(tr);
+  });
+  renderDockTable();
+}
+// Bottom dock: show only the test point(s) at the obstacle's current position.
+function renderDockTable(){
+  const activeSensors=project.sensors.filter(s=>s.active);
+  const side=project.project.doorSide;
+  const head=$("dockHead");
+  if(head) head.innerHTML=tpHeaderHtml(activeSensors)+`</tr>`;
+  const body=$("dockBody2"); if(!body) return; body.innerHTML="";
+  const title=$("dockTitle");
+  // Find which test point the obstacle is sitting on (snap match within 1mm)
+  const matched=[];
+  for(const o of project.obstacles){
+    for(const tp of project.testPoints){
+      if(tp.obstacleId===o.id && Math.abs(tp.x-o.x)<2 && Math.abs(tp.y-o.y)<2)
+        matched.push(tp);
+    }
+  }
+  if(title) title.innerHTML=matched.length
+    ?`<strong>Current: ${matched.map(t=>t.id).join(", ")}</strong>`
+    :`<strong>Move obstacle to a test point to see results</strong>`;
+  matched.forEach(tp=>{
+    const tr=document.createElement("tr");
+    if(tp.blind) tr.className="blind";
+    tr.innerHTML=tpRowHtml(tp,activeSensors,side);
     body.appendChild(tr);
   });
 }
@@ -2298,16 +2295,6 @@ function updateDoorPctLabel(){
   const inp=$("doorAngInput"); if(inp && document.activeElement!==inp) inp.value=ang.toFixed(1);
   const t=(project.door.openTimeS||0)*pct/100;
   $("doorTimeVal").textContent="  t="+t.toFixed(2)+"s";
-}
-// Bottom dock: switch between the Test Points and Proximity tables.
-function setBottomTab(name){
-  const isTp=name!=="prox";
-  const tp=$("tpTableWrap"), dp=$("distWrap");
-  if(tp) tp.style.display=isTp?"":"none";
-  if(dp) dp.style.display=isTp?"none":"";
-  const bt=$("dockTabTp"), bp=$("dockTabProx");
-  if(bt) bt.classList.toggle("active",isTp);
-  if(bp) bp.classList.toggle("active",!isTp);
 }
 // Bottom dock: collapse to just its header bar so the canvas area grows.
 function toggleBottomDock(){
