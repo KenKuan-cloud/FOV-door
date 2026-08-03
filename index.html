@@ -292,9 +292,10 @@ a.dl{color:var(--accent)}
       <!-- Results: full test-point table -->
       <div class="panel" data-tab="results">
         <h2>Test Point Results</h2>
-        <p class="hint">Door open = max door opening before the door contacts the obstacle
-          placed at each test point location. Per-sensor columns show the distance from
-          each sensor to that point at the current door position.</p>
+        <p class="hint">Select an obstacle to calculate results for all test points using that obstacle's dimensions.</p>
+        <div style="margin-bottom:6px">
+          <label style="font-size:11px">Obstacle: <select id="resultsObsSel" onchange="renderTpTable()" style="font-size:11px"></select></label>
+        </div>
         <div id="resultsTableWrap" style="overflow-x:auto">
           <table id="resultsTable" style="font-size:11px">
             <thead id="resultsHead"></thead>
@@ -2043,16 +2044,18 @@ function doorOpenAtPoint(tp){
   return doorOpenBeforeContact(virtualObs);
 }
 // Build one row of test-point data (shared by sidebar Results table and bottom dock).
-function tpRowHtml(tp, activeSensors, side){
-  const c=doorOpenAtPoint(tp);
-  const cCol=c.contact?"var(--red)":"var(--green)";
-  const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`No contact`;
-  const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
-  const openDeg=doorAngleForPercent(tp.doorPct,project.door,side);
-  let doorDist="—";
-  let doorDistCol="";
+function tpRowHtml(tp, activeSensors, side, opts){
+  const obsOverride=opts&&opts.obs;
+  const doorPctOverride=opts&&opts.doorPct;
+  const obs=obsOverride||project.obstacles.find(o=>o.id===tp.obstacleId);
+  const usePct=doorPctOverride!=null?doorPctOverride:tp.doorPct;
+  const openDeg=doorAngleForPercent(usePct,project.door,side);
+  let cTxt="—", cCol="", doorDist="—", doorDistCol="";
   if(obs){
     const vObs={...obs, x:tp.x, y:tp.y, z:tp.z};
+    const c=doorOpenBeforeContact(vObs);
+    cCol=c.contact?"var(--red)":"var(--green)";
+    cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`No contact`;
     const dd=distDoorToObs(vObs,openDeg,side);
     doorDist=dd.dist+"mm";
     doorDistCol=dd.dist<=0?"var(--red)":dd.dist<=100?"var(--yellow)":"var(--green)";
@@ -2065,15 +2068,13 @@ function tpRowHtml(tp, activeSensors, side){
     sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td>`;
   });
   return `<td>${tp.id}</td>
-    <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
-    <td style="text-align:right;color:${doorDistCol}" title="Door-to-obstacle distance at test point door %">${doorDist}</td>
-    <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
+    <td style="color:${cCol}" title="${cTxt==='—'?'No obstacle selected':''}">${cTxt}</td>
+    <td style="text-align:right;color:${doorDistCol}">${doorDist}</td>
     ${sensorCols}`;
 }
 function tpHeaderHtml(activeSensors){
   let h=`<tr><th>ID</th><th title="Door angle when door contacts obstacle at this point">Door open</th>
-    <th title="Distance from door to obstacle at test point door position">Door dist</th>
-    <th>Sensor</th><th>Obstacle</th>`;
+    <th title="Distance from door to obstacle at current door position">Door dist</th>`;
   activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th>`; });
   return h;
 }
@@ -2081,13 +2082,21 @@ function tpHeaderHtml(activeSensors){
 function renderTpTable(){
   const activeSensors=project.sensors.filter(s=>s.active);
   const side=project.project.doorSide;
+  const sel=$("resultsObsSel");
+  if(sel){
+    const prev=sel.value;
+    sel.innerHTML=project.obstacles.map(o=>`<option value="${o.id}">${o.id} (${o.type})</option>`).join("");
+    if(prev && project.obstacles.find(o=>o.id===prev)) sel.value=prev;
+  }
+  const obsId=sel?sel.value:null;
+  const obs=obsId?project.obstacles.find(o=>o.id===obsId):null;
   const head=$("resultsHead");
   if(head) head.innerHTML=tpHeaderHtml(activeSensors)+`<th>Comments</th><th></th></tr>`;
   const body=$("resultsBody"); if(!body) return; body.innerHTML="";
   project.testPoints.forEach(tp=>{
     const tr=document.createElement("tr");
     if(tp.blind) tr.className="blind";
-    tr.innerHTML=tpRowHtml(tp,activeSensors,side)
+    tr.innerHTML=tpRowHtml(tp,activeSensors,side,{obs:obs})
       +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
       +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
     tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
@@ -2103,21 +2112,20 @@ function renderDockTable(){
   if(head) head.innerHTML=tpHeaderHtml(activeSensors)+`</tr>`;
   const body=$("dockBody2"); if(!body) return; body.innerHTML="";
   const title=$("dockTitle");
-  // Find which test point the obstacle is sitting on (snap match within 1mm)
   const matched=[];
   for(const o of project.obstacles){
     for(const tp of project.testPoints){
       if(tp.obstacleId===o.id && Math.abs(tp.x-o.x)<2 && Math.abs(tp.y-o.y)<2)
-        matched.push(tp);
+        matched.push({tp,obs:o});
     }
   }
   if(title) title.innerHTML=matched.length
-    ?`<strong>Current: ${matched.map(t=>t.id).join(", ")}</strong>`
+    ?`<strong>Current: ${matched.map(m=>m.tp.id).join(", ")}</strong>`
     :`<strong>Move obstacle to a test point to see results</strong>`;
-  matched.forEach(tp=>{
+  matched.forEach(m=>{
     const tr=document.createElement("tr");
-    if(tp.blind) tr.className="blind";
-    tr.innerHTML=tpRowHtml(tp,activeSensors,side);
+    if(m.tp.blind) tr.className="blind";
+    tr.innerHTML=tpRowHtml(m.tp,activeSensors,side,{obs:m.obs,doorPct:project.view.doorPct});
     body.appendChild(tr);
   });
 }
