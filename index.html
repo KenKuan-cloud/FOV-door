@@ -2046,25 +2046,35 @@ function doorOpenAtPoint(tp){
 function tpRowHtml(tp, activeSensors, side){
   const c=doorOpenAtPoint(tp);
   const cCol=c.contact?"var(--red)":"var(--green)";
-  const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`${Math.round(c.deg)}° max`;
+  const cTxt=c.contact?`${c.pct}% (${Math.round(c.deg)}°)`:`No contact`;
+  const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
   const openDeg=doorAngleForPercent(tp.doorPct,project.door,side);
+  let doorDist="—";
+  let doorDistCol="";
+  if(obs){
+    const vObs={...obs, x:tp.x, y:tp.y, z:tp.z};
+    const dd=distDoorToObs(vObs,openDeg,side);
+    doorDist=dd.dist+"mm";
+    doorDistCol=dd.dist<=0?"var(--red)":dd.dist<=100?"var(--yellow)":"var(--green)";
+  }
   let sensorCols="";
   activeSensors.forEach(s=>{
     const sp=sensorWorldPos(s,openDeg,side);
     const sDist=Math.round(Math.sqrt((sp.x-tp.x)**2+(sp.y-tp.y)**2+(sp.z-tp.z)**2));
-    const sDx=Math.round(sp.x-tp.x);
     const col=sDist<=(s.stopMm||300)?"var(--red)":sDist<=(s.warningMm||800)?"var(--yellow)":"var(--green)";
-    sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td><td style="text-align:right">${sDx}</td>`;
+    sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td>`;
   });
   return `<td>${tp.id}</td>
     <td style="color:${cCol}" title="${c.contact?'Door contacts obstacle at this opening':'Door never reaches obstacle'}">${cTxt}</td>
+    <td style="text-align:right;color:${doorDistCol}" title="Door-to-obstacle distance at test point door %">${doorDist}</td>
     <td>${tp.sensorId||"—"}</td><td>${tp.obstacleId||"—"}</td>
     ${sensorCols}`;
 }
 function tpHeaderHtml(activeSensors){
-  let h=`<tr><th>ID</th><th title="Max door opening before contact with obstacle placed at this point">Door open</th>
+  let h=`<tr><th>ID</th><th title="Door angle when door contacts obstacle at this point">Door open</th>
+    <th title="Distance from door to obstacle at test point door position">Door dist</th>
     <th>Sensor</th><th>Obstacle</th>`;
-  activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th><th title="${s.id} fore-aft gap">${s.id} ΔX</th>`; });
+  activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th>`; });
   return h;
 }
 // Full table in sidebar Results panel.
