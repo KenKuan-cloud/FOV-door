@@ -581,6 +581,41 @@ function isInAnyFov(pt, doorPct){
   }
   return null;
 }
+// Check if obstacle rectangle (front plane) overlaps any active sensor FOV.
+function isObsInAnyFov(tp, obs, doorPct){
+  if(!obs) return isInAnyFov({x:tp.y, y:tp.z}, doorPct);
+  const hw=(obs.width||60)/2, h=obs.height||1000;
+  const rect={y1:tp.y-hw, y2:tp.y+hw, z1:tp.z, z2:tp.z+h};
+  const corners=[{x:rect.y1,y:rect.z1},{x:rect.y2,y:rect.z1},
+                 {x:rect.y2,y:rect.z2},{x:rect.y1,y:rect.z2}];
+  const side=project.project.doorSide;
+  for(const s of project.sensors){
+    if(!s.active) continue;
+    const pose=sensorPoseAtAngle(s, project.door, doorAngleForPercent(doorPct, project.door, side), side);
+    const poly=fovPolygon(pose, s.hFovDeg, s.minRangeMm, s.maxRangeMm);
+    if(polyRectsOverlap(poly, corners, rect)) return s.id;
+  }
+  return null;
+}
+function _segsIntersect(a,b,c,d){
+  const cross=(u,v)=>u.x*v.y-u.y*v.x;
+  const sub=(p,q)=>({x:p.x-q.x,y:p.y-q.y});
+  const r=sub(b,a), s=sub(d,c), rxs=cross(r,s);
+  if(Math.abs(rxs)<1e-10) return false;
+  const qp=sub(c,a), t=cross(qp,s)/rxs, u=cross(qp,r)/rxs;
+  return t>=0&&t<=1&&u>=0&&u<=1;
+}
+function polyRectsOverlap(poly, corners, rect){
+  for(const c of corners) if(pointInPolygon(c, poly)) return true;
+  for(const v of poly) if(v.x>=rect.y1&&v.x<=rect.y2&&v.y>=rect.z1&&v.y<=rect.z2) return true;
+  const rectEdges=[[corners[0],corners[1]],[corners[1],corners[2]],
+                   [corners[2],corners[3]],[corners[3],corners[0]]];
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i], b=poly[(i+1)%poly.length];
+    for(const [c,d] of rectEdges) if(_segsIntersect(a,b,c,d)) return true;
+  }
+  return false;
+}
 // Andrew's monotone-chain convex hull.
 function convexHull(pts){
   const p=pts.slice().sort((a,b)=>a.x-b.x||a.y-b.y);
@@ -1868,9 +1903,10 @@ function rateResult(rate){
 // When measured repetitions exist, the result comes from the detection rate (§16);
 // otherwise from the geometric in-FOV check.
 function evaluateTestPoint(tp, sweptPoly){
-  const pt={x:tp.y, y:tp.z};
-  const sid=isInAnyFov(pt, tp.doorPct);
+  const obs=project.obstacles.find(o=>o.id===tp.obstacleId);
+  const sid=isObsInAnyFov(tp, obs, tp.doorPct);
   tp.sensorId=sid; tp.inFov=!!sid;
+  const pt={x:tp.y, y:tp.z};
   const swept = sweptPoly || sweptEnvelopePolygon(project.door,project.project.doorSide);
   const inSwept=pointInPolygon(pt, swept);
   tp.blind = inSwept && !tp.inFov;
