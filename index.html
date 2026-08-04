@@ -2082,8 +2082,8 @@ function tpRowHtml(tp, activeSensors, side, opts){
 }
 function tpHeaderHtml(activeSensors){
   let h=`<tr><th>ID</th><th title="Door angle when door contacts obstacle at this point">Door open</th>
-    <th title="Distance from door to obstacle at current door position">Door dist</th>`;
-  activeSensors.forEach(s=>{ h+=`<th title="${s.id} distance (mm)">${s.id} dist</th>`; });
+    <th style="text-align:right" title="Distance from door to obstacle at current door position">Door dist</th>`;
+  activeSensors.forEach(s=>{ h+=`<th style="text-align:right" title="${s.id} distance (mm)">${s.id} dist</th>`; });
   return h;
 }
 // Full table in sidebar Results panel.
@@ -2127,8 +2127,9 @@ function renderDockTable(){
         matched.push({tp,obs:o});
     }
   }
+  const doorAngle=Math.round(doorAngleForPercent(project.view.doorPct,project.door,side));
   if(title) title.innerHTML=matched.length
-    ?`<strong>Current: ${matched.map(m=>m.tp.id).join(", ")}</strong>`
+    ?`<strong>Current: ${matched.map(m=>m.tp.id).join(", ")}</strong> <span style="color:var(--gray);font-size:10px;margin-left:8px">Door position: ${Math.round(project.view.doorPct)}% (${doorAngle}°)</span>`
     :`<strong>Move obstacle to a test point to see results</strong>`;
   matched.forEach(m=>{
     const tr=document.createElement("tr");
