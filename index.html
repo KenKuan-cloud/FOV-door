@@ -275,13 +275,12 @@ a.dl{color:var(--accent)}
         <div class="group">
           <span class="group-cap">Door-zone set (21 pts)</span>
           <div class="row" style="align-items:flex-end">
-            <div class="field"><label>Object for these points</label>
+            <div class="field"><label>Object for new set</label>
               <select id="tpSetObs"></select></div>
-            <div class="field" style="flex:0 0 auto"><button class="primary" onclick="loadDoorZoneTestSet()">Load</button></div>
+            <div class="field" style="flex:0 0 auto"><button class="primary" onclick="loadDoorZoneTestSet()">+ Add set</button></div>
           </div>
-          <div class="field"><label>X shift (mm, fore-aft — shifts all 21 points)</label>
-            <input id="tpSetXShift" type="number" value="0" step="10" onchange="setTestSetXShift(this.value)"></div>
-          <p class="mini" style="color:var(--muted)">7×3 grid P1–P21, z=0. Y measured outboard from the door edge (re-anchors per door). Loading replaces any existing P1–P21 points.</p>
+          <p class="mini" style="color:var(--muted)">7x3 grid, z=0. Y measured outboard from the door edge. Each set has its own X/Y shift.</p>
+          <div id="testSetsList"></div>
         </div>
         <p class="hint">Blind points (inside the door swept
           envelope but outside the sensor FOV, criterion&nbsp;12) are highlighted red
@@ -468,6 +467,7 @@ function defaultProject(){
     sensors:[ demoSensor() ],
     obstacles:[ { id:"O1", type:"Pole", x:0, y:-1600, z:0, width:80, depth:80, height:2000 } ],
     testPoints:[],
+    testSets:[],
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
@@ -1678,7 +1678,7 @@ function loadProjectFields(){
   $("p_name").value=p.name; $("p_vehicle").value=p.vehicleModel;
   $("p_customer").value=p.customer; $("p_side").value=p.doorSide;
   $("p_by").value=p.preparedBy; $("p_date").value=p.testDate; $("p_notes").value=p.notes;
-  if($("tpSetXShift")) $("tpSetXShift").value=project.testSetXShift||0;
+  renderTestSetsList();
   syncDoorSideToggle();
 }
 // ---- Door fields ----
@@ -1891,41 +1891,81 @@ function doorEdgeY(){
 }
 function doorOutboardSign(){ return project.project.doorSide==="RH" ? 1 : -1; }
 // Re-anchor door-edge-relative test points to the current door (per-door update).
-// Y = door edge + outboard offset; X = base fore-aft + user X shift.
 function refreshDoorRelTestPoints(){
   if(!project||!project.testPoints) return;
-  const edge=doorEdgeY(), sign=doorOutboardSign(), xShift=project.testSetXShift||0;
+  const edge=doorEdgeY(), sign=doorOutboardSign();
   const pct=project.view.doorPct;
+  const sets=project.testSets||[];
   for(const tp of project.testPoints){
     if(tp.doorRel){
-      tp.y=Math.round(edge+sign*tp.yMag);
+      const s=sets.find(s=>s.id===tp.setId);
+      const xShift=s?s.xShift:0, yShift=s?s.yShift:0;
+      tp.y=Math.round(edge+sign*(tp.yMag+yShift));
       if(tp.xBase!=null) tp.x=Math.round(tp.xBase+xShift);
-      tp.doorPct=pct; // door-zone set re-evaluates at the current door position
+      tp.doorPct=pct;
     }
   }
 }
-function setTestSetXShift(v){
-  project.testSetXShift=parseFloat(v)||0;
-  recomputeAll(); render();
+function nextSetId(){
+  const sets=project.testSets||[];
+  let n=1; while(sets.some(s=>s.id==="Set"+n)) n++;
+  return "Set"+n;
 }
 function loadDoorZoneTestSet(){
   const obsId=($("tpSetObs")&&$("tpSetObs").value)
     || (project.obstacles[0]&&project.obstacles[0].id) || "";
-  // remove any previously loaded P# points so re-loading refreshes cleanly
-  project.testPoints=project.testPoints.filter(t=>!/^P\d+$/.test(t.id));
+  const setId=nextSetId();
+  if(!project.testSets) project.testSets=[];
+  project.testSets.push({id:setId, obsId, xShift:0, yShift:0});
   const doorPct=project.view.doorPct;
-  const edge=doorEdgeY(), sign=doorOutboardSign(), xShift=project.testSetXShift||0;
-  for(const [id,x,mag] of DOOR_ZONE_TEST_SET){
-    const tp={ id, x:Math.round(x+xShift), y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
-      doorRel:true, yMag:mag, xBase:x, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
+  const edge=doorEdgeY(), sign=doorOutboardSign();
+  for(const [baseName,x,mag] of DOOR_ZONE_TEST_SET){
+    const id=setId+"-"+baseName;
+    const tp={ id, x:Math.round(x), y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
+      setId, doorRel:true, yMag:mag, xBase:x, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
     project.testPoints.push(tp);
     evaluateTestPoint(tp);
   }
-  renderTpTable(); render();
+  renderTestSetsList(); renderTpTable(); render();
+}
+function deleteTestSet(setId){
+  if(!confirm("Delete set "+setId+" and all its points?")) return;
+  project.testPoints=project.testPoints.filter(t=>t.setId!==setId);
+  project.testSets=(project.testSets||[]).filter(s=>s.id!==setId);
+  renderTestSetsList(); renderTpTable(); render();
+}
+function updateSetShift(setId, axis, val){
+  const s=(project.testSets||[]).find(s=>s.id===setId); if(!s) return;
+  s[axis]=parseFloat(val)||0;
+  recomputeAll(); render();
+}
+function renderTestSetsList(){
+  const wrap=$("testSetsList"); if(!wrap) return;
+  const sets=project.testSets||[];
+  if(!sets.length){ wrap.innerHTML="<p class='mini' style='color:var(--muted)'>No sets loaded.</p>"; return; }
+  wrap.innerHTML=sets.map(s=>{
+    const count=(project.testPoints||[]).filter(t=>t.setId===s.id).length;
+    return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:4px 0">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <strong style="font-size:11px">${s.id}</strong>
+        <span class="mini" style="color:var(--muted)">${count} pts · ${s.obsId}</span>
+        <span style="flex:1"></span>
+        <button onclick="deleteTestSet('${s.id}')" style="font-size:10px;padding:1px 6px;color:var(--red)">Delete</button>
+      </div>
+      <div class="row" style="gap:6px">
+        <div class="field" style="flex:1"><label style="font-size:10px">X shift (mm)</label>
+          <input type="number" value="${s.xShift}" step="10" style="font-size:11px;width:70px"
+            onchange="updateSetShift('${s.id}','xShift',this.value)"></div>
+        <div class="field" style="flex:1"><label style="font-size:10px">Y shift (mm)</label>
+          <input type="number" value="${s.yShift}" step="10" style="font-size:11px;width:70px"
+            onchange="updateSetShift('${s.id}','yShift',this.value)"></div>
+      </div>
+    </div>`; }).join("");
 }
 function clearTestPoints(){
   if(project.testPoints.length && !confirm("Clear all test points?")) return;
-  project.testPoints=[]; renderTpTable(); render();
+  project.testPoints=[]; project.testSets=[];
+  renderTestSetsList(); renderTpTable(); render();
 }
 // Repeatability statistics (§16) from a test point's measured repetitions.
 // reps: [{detected, measuredMm, actualMm, delayMs, false}]. Returns null if none.
@@ -2186,17 +2226,45 @@ function renderTpTable(){
   const obsId=sel?sel.value:null;
   const obs=obsId?project.obstacles.find(o=>o.id===obsId):null;
   const head=$("resultsHead");
+  const nCols=3+activeSensors.length+2;
   if(head) head.innerHTML=tpHeaderHtml(activeSensors)+`<th>Comments</th><th></th></tr>`;
   const body=$("resultsBody"); if(!body) return; body.innerHTML="";
+  const sets=project.testSets||[];
+  const setPoints={};
+  const noSet=[];
   project.testPoints.forEach(tp=>{
-    const tr=document.createElement("tr");
-    if(tp.blind) tr.className="blind";
-    tr.innerHTML=tpRowHtml(tp,activeSensors,side,{obs:obs})
-      +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
-      +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
-    tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
-    body.appendChild(tr);
+    if(tp.setId){ (setPoints[tp.setId]=setPoints[tp.setId]||[]).push(tp); }
+    else noSet.push(tp);
   });
+  function appendPoints(pts){
+    pts.forEach(tp=>{
+      const tr=document.createElement("tr");
+      if(tp.blind) tr.className="blind";
+      tr.innerHTML=tpRowHtml(tp,activeSensors,side,{obs:obs})
+        +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
+        +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
+      tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
+      body.appendChild(tr);
+    });
+  }
+  sets.forEach(s=>{
+    const pts=setPoints[s.id]||[];
+    const pass=pts.filter(t=>t.result==="PASS").length;
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td colspan="${nCols}" style="background:var(--panel2);font-size:11px;font-weight:600;padding:6px 8px">
+      ${s.id} <span style="font-weight:400;color:var(--muted)">(${pts.length} pts · ${s.obsId} · X:${s.xShift>0?"+":""}${s.xShift} Y:${s.yShift>0?"+":""}${s.yShift}mm · ${pass}/${pts.length} pass)</span>
+      <button onclick="deleteTestSet('${s.id}')" style="float:right;font-size:10px;padding:1px 8px;color:var(--red)">Delete set</button></td>`;
+    body.appendChild(tr);
+    appendPoints(pts);
+  });
+  if(noSet.length){
+    if(sets.length){
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td colspan="${nCols}" style="background:var(--panel2);font-size:11px;font-weight:600;padding:6px 8px">Manual points <span style="font-weight:400;color:var(--muted)">(${noSet.length} pts)</span></td>`;
+      body.appendChild(tr);
+    }
+    appendPoints(noSet);
+  }
   renderDockTable();
 }
 // Bottom dock: show only the test point(s) at the obstacle's current position.
