@@ -362,6 +362,7 @@ a.dl{color:var(--accent)}
           <span class="tb-cap">Overlays</span>
           <label><input type="checkbox" id="showSwept"> Swept envelope</label>
           <label><input type="checkbox" id="showGhost"> Swept FOV</label>
+          <label><input type="checkbox" id="showSweptFov3d" onchange="render()"> 3D swept FOV</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
           <label><input type="checkbox" id="showTpIds"> Point IDs</label>
         </div>
@@ -1427,6 +1428,53 @@ function sensorConeFaces(s,openDeg,side){
   faces.push({pts:far, fill, stroke:edgeFar, lw:1.2});
   return {faces, apex};
 }
+function sweptFov3dFaces(door, side){
+  const faces=[], N=20, steps=[];
+  for(let pct=0;pct<=100;pct+=5) steps.push(pct);
+  for(const s of project.sensors){
+    if(!s.active||s.showFov===false) continue;
+    const c=sensorColor(s);
+    const fill=c+"0d", stroke=c+"30";
+    const rings=[];
+    for(const pct of steps){
+      const od=doorAngleForPercent(pct,door,side);
+      const pose=sensorPoseAtAngle(s,door,od,side);
+      const apex={x:door.hingeX+s.posX, y:pose.x, z:pose.y};
+      const f=pose.facing;
+      const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
+      const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];
+      const hx=[cp,-Math.cos(f)*sp,-Math.sin(f)*sp];
+      const vx=[0, -Math.sin(f),    Math.cos(f)   ];
+      const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
+      const ring=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
+        const dir=V.norm([ax[0]+th*Math.cos(t)*hx[0]+tv*Math.sin(t)*vx[0],
+                         ax[1]+th*Math.cos(t)*hx[1]+tv*Math.sin(t)*vx[1],
+                         ax[2]+th*Math.cos(t)*hx[2]+tv*Math.sin(t)*vx[2]]);
+        ring.push({x:apex.x+s.maxRangeMm*dir[0], y:apex.y+s.maxRangeMm*dir[1], z:apex.z+s.maxRangeMm*dir[2]});
+      }
+      rings.push({ring, apex});
+    }
+    for(let r=0;r<rings.length-1;r++){
+      const ra=rings[r].ring, rb=rings[r+1].ring;
+      for(let i=0;i<N;i++){ const j=(i+1)%N;
+        faces.push({pts:[ra[i],ra[j],rb[j],rb[i]], fill, stroke, lw:0.5});
+      }
+      const aa=rings[r].apex, ab=rings[r+1].apex;
+      for(let i=0;i<N;i++){ const j=(i+1)%N;
+        faces.push({pts:[aa,ra[i],ra[j]], fill, stroke, lw:0.3});
+        faces.push({pts:[ab,rb[i],rb[j]], fill, stroke, lw:0.3});
+      }
+    }
+    const first=rings[0], last=rings[rings.length-1];
+    for(let i=0;i<N;i++){ const j=(i+1)%N;
+      faces.push({pts:[first.apex,first.ring[i],first.ring[j]], fill:c+"15", stroke:c+"50", lw:0.8});
+      faces.push({pts:[last.apex,last.ring[i],last.ring[j]], fill:c+"15", stroke:c+"50", lw:0.8});
+    }
+    faces.push({pts:first.ring, fill:c+"15", stroke:c+"50", lw:0.8});
+    faces.push({pts:last.ring, fill:c+"15", stroke:c+"50", lw:0.8});
+  }
+  return faces;
+}
 function draw3DScene(){
   cur3B=cam3Basis();
   ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
@@ -1477,6 +1525,10 @@ function draw3DScene(){
   const apexes=[];
   for(const s of project.sensors){ if(!s.active) continue;
     const fr=sensorConeFaces(s,openDeg,side); faces=faces.concat(fr.faces); apexes.push({s,apex:fr.apex}); }
+  // Swept FOV 3D: cone envelope across all door positions
+  if($("showSweptFov3d")&&$("showSweptFov3d").checked){
+    faces=faces.concat(sweptFov3dFaces(d,side));
+  }
   // obstacles — type-aware 3D shapes, grounded at z=0 except Hanging object
   for(const o of project.obstacles){
     const preset=OBSTACLE_PRESETS[o.type]||OBSTACLE_PRESETS["Custom obstacle"];
