@@ -270,10 +270,10 @@ a.dl{color:var(--accent)}
           <div class="row">
             <div class="field"><label>X fore-aft (mm)</label><input id="tp_x" type="number" value="0"></div>
             <div class="field"><label>Y horiz (mm)</label><input id="tp_y" type="number" value="-1600"></div>
-            <div class="field"><label>Z height (mm)</label><input id="tp_z" type="number" value="1000"></div>
           </div>
           <button onclick="addTestPointManual()">+ Add test point</button>
           <button onclick="clearTestPoints()">Clear all</button>
+          <div id="singlePointsList" style="margin-top:6px"></div>
         </div>
         <div class="group">
           <span class="group-cap">Door-zone set (21 pts)</span>
@@ -1203,7 +1203,7 @@ function drawTestPoints(){
       ctx.beginPath(); ctx.arc(q.x,q.y,8,0,7); ctx.stroke(); }
     if($("showTpIds")&&$("showTpIds").checked){
       ctx.fillStyle=cssVar("--fg"); ctx.font="10px sans-serif";
-      ctx.fillText(tp.id,q.x+7,q.y+3);
+      ctx.fillText(tp.displayId||tp.id,q.x+7,q.y+3);
     }
   }
 }
@@ -1630,7 +1630,7 @@ function draw3DScene(){
     if($("showTpIds")&&$("showTpIds").checked){
       const q=project3D({x:tp.x,y:tp.y,z:tp.z});
       ctx.fillStyle=cssVar("--fg"); ctx.font="10px sans-serif";
-      ctx.fillText(tp.id,q.x+6,q.y-4);
+      ctx.fillText(tp.displayId||tp.id,q.x+6,q.y-4);
     }
   }
   // obstacle labels — anchored above each object's top
@@ -1872,7 +1872,9 @@ function addTestPointManual(){
   const idField=$("tp_id");
   const customId=idField?idField.value.trim():"";
   addTestPoint(parseFloat($("tp_x").value)||0, parseFloat($("tp_y").value)||0,
-    parseFloat($("tp_z").value)||0, $("tp_obs").value, customId||undefined);
+    0, $("tp_obs").value, customId||undefined);
+  if(idField) idField.value="";
+  renderSinglePointsList();
 }
 // Standard 21-point door-zone test grid. x = fore-aft (0 = center column,
 // 60 cm spacing). The third value is the OUTBOARD distance (mm) from the door
@@ -1927,7 +1929,7 @@ function loadDoorZoneTestSet(){
   const edge=doorEdgeY(), sign=doorOutboardSign();
   for(const [baseName,x,mag] of DOOR_ZONE_TEST_SET){
     const id=setId+"-"+baseName;
-    const tp={ id, x:Math.round(x), y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
+    const tp={ id, displayId:baseName, x:Math.round(x), y:Math.round(edge+sign*mag), z:0, doorPct, obstacleId:obsId,
       setId, doorRel:true, yMag:mag, xBase:x, sensorId:null, inFov:false, blind:false, result:"", comments:"" };
     project.testPoints.push(tp);
     evaluateTestPoint(tp);
@@ -1971,7 +1973,7 @@ function renderTestSetsList(){
 function clearTestPoints(){
   if(project.testPoints.length && !confirm("Clear all test points?")) return;
   project.testPoints=[]; project.testSets=[];
-  renderTestSetsList(); renderTpTable(); render();
+  renderTestSetsList(); renderSinglePointsList(); renderTpTable(); render();
 }
 // Repeatability statistics (§16) from a test point's measured repetitions.
 // reps: [{detected, measuredMm, actualMm, delayMs, false}]. Returns null if none.
@@ -2166,12 +2168,32 @@ function doorOpenBeforeContact(o){
 }
 
 function updateDistPanel(){ renderDockTable(); }
-function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
+function removeTp(id){
+  project.testPoints=project.testPoints.filter(t=>t.id!==id);
+  renderSinglePointsList(); renderTpTable(); render();
+}
 function renameTp(tp, newId){
-  if(!newId||newId===tp.id) return;
-  if(project.testPoints.some(t=>t!==tp&&t.id===newId)){ alert("ID '"+newId+"' already in use."); renderTpTable(); return; }
-  tp.id=newId;
-  render();
+  if(!newId||newId===(tp.displayId||tp.id)) return;
+  const field=tp.displayId!=null?"displayId":"id";
+  if(field==="id"&&project.testPoints.some(t=>t!==tp&&t.id===newId)){ alert("ID '"+newId+"' already in use."); renderSinglePointsList(); return; }
+  tp[field]=newId;
+  renderSinglePointsList(); render();
+}
+function renderSinglePointsList(){
+  const wrap=$("singlePointsList"); if(!wrap) return;
+  const pts=project.testPoints.filter(t=>!t.setId);
+  if(!pts.length){ wrap.innerHTML=""; return; }
+  wrap.innerHTML=`<table style="font-size:11px;width:100%;border-collapse:collapse">
+    <tr><th style="text-align:left;padding:2px 4px">ID</th><th style="text-align:right;padding:2px 4px">X</th>
+    <th style="text-align:right;padding:2px 4px">Y</th><th style="text-align:left;padding:2px 4px">Obs</th><th></th></tr>
+    ${pts.map(tp=>`<tr>
+      <td style="padding:2px 4px"><input value="${(tp.displayId||tp.id).replace(/"/g,'&quot;')}" style="width:70px;font-size:11px"
+        onchange="renameTp(project.testPoints.find(t=>t.id==='${tp.id}'),this.value.trim())"></td>
+      <td style="text-align:right;padding:2px 4px">${Math.round(tp.x)}</td>
+      <td style="text-align:right;padding:2px 4px">${Math.round(tp.y)}</td>
+      <td style="padding:2px 4px">${tp.obstacleId}</td>
+      <td style="padding:2px 4px"><button onclick="removeTp('${tp.id}')" style="font-size:10px;padding:0 4px;color:var(--red)">✕</button></td>
+    </tr>`).join("")}</table>`;
 }
 
 
@@ -2214,7 +2236,7 @@ function tpRowHtml(tp, activeSensors, side, opts){
     const col=sDist<=(s.stopMm||300)?"var(--red)":sDist<=(s.warningMm||800)?"var(--yellow)":"var(--green)";
     sensorCols+=`<td style="text-align:right;color:${col}">${sDist}mm</td>`;
   });
-  return `<td>${tp.id}</td>
+  return `<td>${tp.displayId||tp.id}</td>
     <td style="color:${cCol}" title="${cTxt==='—'?'No obstacle selected':''}">${cTxt}</td>
     <td style="text-align:right;color:${doorDistCol}">${doorDist}</td>
     ${sensorCols}`;
@@ -2248,16 +2270,13 @@ function renderTpTable(){
     if(tp.setId){ (setPoints[tp.setId]=setPoints[tp.setId]||[]).push(tp); }
     else noSet.push(tp);
   });
-  function appendPoints(pts){
+  function appendPoints(pts, editable){
     pts.forEach(tp=>{
       const tr=document.createElement("tr");
       if(tp.blind) tr.className="blind";
-      const rowHtml=tpRowHtml(tp,activeSensors,side,{obs:obs});
-      const idCell=`<td><input data-k="id" value="${tp.id.replace(/"/g,'&quot;')}" style="width:80px;font-size:11px"></td>`;
-      tr.innerHTML=idCell+rowHtml.replace(/^<td>[^<]*<\/td>/,"")
+      tr.innerHTML=tpRowHtml(tp,activeSensors,side,{obs:obs})
         +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
         +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
-      tr.querySelector("[data-k='id']").addEventListener("change",e=>renameTp(tp,e.target.value.trim()));
       tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
       body.appendChild(tr);
     });
@@ -2299,7 +2318,7 @@ function renderDockTable(){
   }
   const doorAngle=Math.round(doorAngleForPercent(project.view.doorPct,project.door,side));
   if(title) title.innerHTML=matched.length
-    ?`<strong>Current: ${matched.map(m=>m.tp.id).join(", ")}</strong> <span style="color:var(--gray);font-size:10px;margin-left:8px">Door position: ${Math.round(project.view.doorPct)}% (${doorAngle}°)</span>`
+    ?`<strong>Current: ${matched.map(m=>m.tp.displayId||m.tp.id).join(", ")}</strong> <span style="color:var(--gray);font-size:10px;margin-left:8px">Door position: ${Math.round(project.view.doorPct)}% (${doorAngle}°)</span>`
     :`<strong>Move obstacle to a test point to see results</strong>`;
   matched.forEach(m=>{
     const tr=document.createElement("tr");
@@ -2401,7 +2420,7 @@ function exportPng(){
 function loadAllUi(){
   loadProjectFields(); loadDoorFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
-  renderTpTable();
+  renderSinglePointsList(); renderTpTable();
   $("doorPct").value=project.view.doorPct;
   $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
@@ -2540,10 +2559,11 @@ function onCanvasDown(canvas,e){
     const r=canvas.getBoundingClientRect();
     W=r.width; H=r.height; curView=info.view; curPlane=info.plane;
     const w=screenToWorld(e.clientX-r.left,e.clientY-r.top); // w.x=horiz, w.y=vert
-    if(info.plane==="top") // horiz=X, vert=Y; Z from field
-      addTestPoint(Math.round(w.x), Math.round(w.y), parseFloat($("tp_z").value)||0, $("tp_obs").value);
-    else // horiz=Y, vert=Z; X from field
+    if(info.plane==="top")
+      addTestPoint(Math.round(w.x), Math.round(w.y), 0, $("tp_obs").value);
+    else
       addTestPoint(parseFloat($("tp_x").value)||0, Math.round(w.x), Math.round(w.y), $("tp_obs").value);
+    renderSinglePointsList();
     return;
   }
   if($("moveObs") && $("moveObs").checked){
