@@ -141,7 +141,6 @@ a.dl{color:var(--accent)}
   <button onclick="exportCsv()">Export CSV</button>
   <button onclick="exportPng()">Export PNG</button>
   <span class="hbar-sep"></span>
-  <button class="primary" onclick="openReport()">Report</button>
 </header>
 
 <div class="layout">
@@ -2315,93 +2314,6 @@ function exportPng(){
   }
   cvEl.toBlob(save);
 }
-function openReport(){
-  const png=cvEl.toDataURL("image/png");
-  const p=project.project, d=project.door;
-  const tps=project.testPoints;
-  const pass=tps.filter(t=>t.result==="PASS").length;
-  const fail=tps.filter(t=>t.result==="FAIL").length;
-  const blind=tps.filter(t=>t.blind).length;
-  const sensorRows=project.sensors.map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.type}</td>
-    <td>${s.hFovDeg}°/${s.vFovDeg}°</td><td>${s.minRangeMm}–${s.maxRangeMm} mm</td>
-    <td>${s.posX},${s.posY},${s.posZ}</td></tr>`).join("");
-  const tpRows=tps.map(t=>`<tr><td>${t.id}</td><td>${t.doorPct}%</td><td>${t.sensorId||"—"}</td>
-    <td>${Math.round(t.x)},${Math.round(t.y)},${Math.round(t.z)}</td>
-    <td>${t.inFov?"YES":"NO"}</td><td>${t.blind?"YES":""}</td><td>${t.result||"—"}</td></tr>`).join("");
-  const dynRows=analyzeAll().map(r=>`<tr><td>${r.id}</td>
-    <td>${r.detectPct!=null?r.detectPct.toFixed(1)+"%":"—"}</td>
-    <td>${r.contacts?r.contactPct.toFixed(1)+"%":"no contact"}</td>
-    <td>${isFinite(r.minClear)?Math.round(r.minClear)+" mm":"—"}</td>
-    <td>${r.reactionMs!=null?Math.round(r.reactionMs)+" ms":"—"}</td>
-    <td>${Math.round(r.sysMs)} ms</td>
-    <td>${r.marginMs!=null?Math.round(r.marginMs)+" ms":"—"}</td>
-    <td><b>${r.cls}</b></td></tr>`).join("");
-  const measured=tps.filter(t=>t.reps&&t.reps.length);
-  const repRows=measured.map(t=>{ const s=tpStats(t);
-    return `<tr><td>${t.id}</td><td>${s.n}</td><td>${s.rate.toFixed(1)}%</td>
-      <td>${s.meanMm!=null?Math.round(s.meanMm):"—"}</td>
-      <td>${s.minMm!=null?Math.round(s.minMm):"—"}</td>
-      <td>${s.maxMm!=null?Math.round(s.maxMm):"—"}</td>
-      <td>${s.stdMm!=null?Math.round(s.stdMm):"—"}</td>
-      <td>${s.maxDelay!=null?Math.round(s.maxDelay):"—"}</td>
-      <td><b>${t.result||"—"}</b></td></tr>`; }).join("");
-  const html=`<!DOCTYPE html><html><head><meta charset="utf-8">
-    <title>FOV Report — ${p.name}</title><style>
-    body{font:13px/1.5 Arial;margin:32px;color:#111}
-    h1{font-size:20px} h2{font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px}
-    table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
-    th,td{border:1px solid #999;padding:5px 8px;text-align:left}
-    th{background:#eee} img{max-width:100%;border:1px solid #ccc}
-    .kv td:first-child{width:180px;color:#555} @media print{button{display:none}}
-    </style></head><body>
-    <button onclick="print()">Print / Save as PDF</button>
-    <h1>Wing Door Sensor FOV Report</h1>
-    <h2>1. Project Information</h2>
-    <table class="kv">
-      <tr><td>Project</td><td>${p.name}</td></tr>
-      <tr><td>Vehicle model</td><td>${p.vehicleModel||"—"}</td></tr>
-      <tr><td>Customer</td><td>${p.customer||"—"}</td></tr>
-      <tr><td>Door side</td><td>${p.doorSide}</td></tr>
-      <tr><td>Prepared by</td><td>${p.preparedBy||"—"}</td></tr>
-      <tr><td>Test date</td><td>${p.testDate||"—"}</td></tr>
-      <tr><td>Notes</td><td>${p.notes||"—"}</td></tr></table>
-    <h2>2. Wing-Door Definition (front view, Y–Z)</h2>
-    <table class="kv">
-      <tr><td>Door type</td><td>Falcon-/gullwing (roof hinge, lifts in Y–Z plane)</td></tr>
-      <tr><td>Hinge (Y, Z)</td><td>${d.hingeY}, ${d.hingeZ} mm &nbsp;(X fore-aft ${d.hingeX})</td></tr>
-      <tr><td>Height</td><td>${d.heightMm} mm</td></tr>
-      <tr><td>Max opening angle</td><td>${d.maxOpenDeg}°</td></tr>
-      <tr><td>Outline points</td><td>${(d.profile||[]).length} corner points</td></tr>
-      <tr><td>Positions</td><td>${d.positionsPct.join(", ")} %</td></tr></table>
-    <h2>3. Sensor Specification</h2>
-    <table><tr><th>ID</th><th>Name</th><th>Type</th><th>FOV (H/V)</th><th>Range</th><th>Pos (X,Y,Z)</th></tr>${sensorRows}</table>
-    <h2>4. Static FOV Visualization (${project.view.plane==="top"?"top view, X–Y":"front view, Y–Z"})</h2>
-    <p>Door at ${project.view.doorPct}% opening (${doorAngleForPercent(project.view.doorPct,d,p.doorSide).toFixed(1)}°).</p><img src="${png}">
-    <h2>5. Summary</h2>
-    <table class="kv">
-      <tr><td>Total test points</td><td>${tps.length}</td></tr>
-      <tr><td>Passed</td><td>${pass}</td></tr>
-      <tr><td>Failed</td><td>${fail}</td></tr>
-      <tr><td>Blind points</td><td>${blind}</td></tr></table>
-    <h2>6. Dynamic Detection &amp; Reaction Margin (§12)</h2>
-    <p>Door open time ${d.openTimeS}s; system response ${totalResponseMs()} ms
-      (sensor ${project.timing.sensorMs} + comms ${project.timing.commMs} +
-      ECU ${project.timing.ecuMs} + motor ${project.timing.motorMs} +
-      mech ${project.timing.mechMs}); target margin ${project.timing.targetMarginMs} ms.</p>
-    <table><tr><th>Obstacle</th><th>Detect %</th><th>Contact %</th><th>Min clearance</th>
-      <th>Reaction</th><th>System</th><th>Margin</th><th>Verdict</th></tr>${dynRows}</table>
-    ${measured.length?`<h2>7. Repeatability &amp; Detection Rate (§16)</h2>
-    <p>Thresholds: PASS ≥ ${project.eval.passRatePct}%, CONDITIONAL ≥ ${project.eval.condRatePct}%.
-      ${measured.length} measured point(s).</p>
-    <table><tr><th>Point</th><th>N</th><th>Det. rate</th><th>Mean mm</th><th>Min</th><th>Max</th>
-      <th>Std</th><th>Max delay ms</th><th>Result</th></tr>${repRows}</table>`:""}
-    <h2>${measured.length?8:7}. Test Point Details</h2>
-    <table><tr><th>ID</th><th>Door%</th><th>Sensor</th><th>Pos (X,Y,Z)</th><th>In FOV</th><th>Blind</th><th>Result</th></tr>${tpRows}</table>
-    <p style="margin-top:30px;color:#888;font-size:11px">Generated by Wing Door Sensor FOV Tool · ${new Date().toLocaleString()}</p>
-    </body></html>`;
-  const w=window.open("","_blank"); w.document.write(html); w.document.close();
-}
-
 /* ====================== 7. INIT / EVENTS ====================== */
 function loadAllUi(){
   loadProjectFields(); loadDoorFields();
