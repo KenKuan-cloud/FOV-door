@@ -262,8 +262,11 @@ a.dl{color:var(--accent)}
           (PASS/FAIL) is computed automatically. Points can also be added manually.</p>
         <div class="group">
           <span class="group-cap">Add single point</span>
-          <div class="field"><label>Obstacle type for new points</label>
-            <select id="tp_obs"></select></div>
+          <div class="row" style="align-items:flex-end">
+            <div class="field"><label>Point ID</label><input id="tp_id" type="text" value="" placeholder="auto" style="width:80px"></div>
+            <div class="field"><label>Obstacle</label>
+              <select id="tp_obs"></select></div>
+          </div>
           <div class="row">
             <div class="field"><label>X fore-aft (mm)</label><input id="tp_x" type="number" value="0"></div>
             <div class="field"><label>Y horiz (mm)</label><input id="tp_y" type="number" value="-1600"></div>
@@ -1855,9 +1858,10 @@ function makeTpId(doorPct,z,x,y){
   seq.t++;
   return `${side}-D${pad(doorPct,2)}-Z${pad(z,3)}-X${pad(x,3)}-Y${pad(y,3)}-P${pad(seq.t,2)}`;
 }
-function addTestPoint(x,y,z,obsId){
+function addTestPoint(x,y,z,obsId,customId){
   const doorPct=project.view.doorPct;
-  const tp={ id:makeTpId(doorPct,z,x,y), x,y,z, doorPct,
+  const id=customId||makeTpId(doorPct,z,x,y);
+  const tp={ id, x,y,z, doorPct,
     obstacleId:obsId||(project.obstacles[0]&&project.obstacles[0].id)||"",
     sensorId:null, inFov:false, blind:false, result:"", comments:"" };
   project.testPoints.push(tp);
@@ -1865,8 +1869,10 @@ function addTestPoint(x,y,z,obsId){
   renderTpTable(); render();
 }
 function addTestPointManual(){
+  const idField=$("tp_id");
+  const customId=idField?idField.value.trim():"";
   addTestPoint(parseFloat($("tp_x").value)||0, parseFloat($("tp_y").value)||0,
-    parseFloat($("tp_z").value)||0, $("tp_obs").value);
+    parseFloat($("tp_z").value)||0, $("tp_obs").value, customId||undefined);
 }
 // Standard 21-point door-zone test grid. x = fore-aft (0 = center column,
 // 60 cm spacing). The third value is the OUTBOARD distance (mm) from the door
@@ -2161,6 +2167,12 @@ function doorOpenBeforeContact(o){
 
 function updateDistPanel(){ renderDockTable(); }
 function removeTp(id){ project.testPoints=project.testPoints.filter(t=>t.id!==id); renderTpTable(); render(); }
+function renameTp(tp, newId){
+  if(!newId||newId===tp.id) return;
+  if(project.testPoints.some(t=>t!==tp&&t.id===newId)){ alert("ID '"+newId+"' already in use."); renderTpTable(); return; }
+  tp.id=newId;
+  render();
+}
 
 
 // Door-open-before-contact with the obstacle placed at a test point location.
@@ -2240,9 +2252,12 @@ function renderTpTable(){
     pts.forEach(tp=>{
       const tr=document.createElement("tr");
       if(tp.blind) tr.className="blind";
-      tr.innerHTML=tpRowHtml(tp,activeSensors,side,{obs:obs})
+      const rowHtml=tpRowHtml(tp,activeSensors,side,{obs:obs});
+      const idCell=`<td><input data-k="id" value="${tp.id.replace(/"/g,'&quot;')}" style="width:80px;font-size:11px"></td>`;
+      tr.innerHTML=idCell+rowHtml.replace(/^<td>[^<]*<\/td>/,"")
         +`<td><input data-k="comments" value="${(tp.comments||"").replace(/"/g,'&quot;')}" style="width:120px"></td>`
         +`<td><button onclick="removeTp('${tp.id}')">✕</button></td>`;
+      tr.querySelector("[data-k='id']").addEventListener("change",e=>renameTp(tp,e.target.value.trim()));
       tr.querySelector("[data-k='comments']").addEventListener("input",e=>tp.comments=e.target.value);
       body.appendChild(tr);
     });
