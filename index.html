@@ -155,6 +155,8 @@ a.dl{color:var(--accent)}
       <span class="tabgroup-label">Test</span>
       <button data-tab="test">Test Points</button>
       <button data-tab="results">Results</button>
+      <span class="tabgroup-label">View</span>
+      <button data-tab="regions">Regions</button>
     </div>
     <div class="panels">
 
@@ -306,6 +308,22 @@ a.dl{color:var(--accent)}
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
+      </div>
+
+      <!-- Map regions (top-view measured-FOV areas) -->
+      <div class="panel" data-tab="regions">
+        <h2>Map Regions (Top View)</h2>
+        <p class="hint">Draw measured-FOV / coverage areas on the <b>Top (X–Y)</b>
+          view. Click <b>+ Add region</b>, then click the top view to drop corner
+          points; <b>double-click</b> or <b>Finish</b> to close it. Use <b>Edit</b>
+          to drag corners, drag an edge to insert a corner, or right-click a corner
+          to delete it. Each region shows its enclosed area (m²).</p>
+        <div class="row" style="align-items:center">
+          <button class="primary" onclick="addRegion()">+ Add region</button>
+          <button id="regFinishBtn" onclick="finishRegion()" style="display:none">Finish</button>
+        </div>
+        <p class="mini" id="regStatus" style="min-height:14px;color:var(--accent)"></p>
+        <div id="regionList" style="margin-top:6px"></div>
       </div>
 
     </div>
@@ -474,6 +492,8 @@ function defaultProject(){
     obstacles:[ { id:"O1", type:"Pole", x:0, y:-1600, z:0, width:80, depth:80, height:2000 } ],
     testPoints:[],
     testSets:[],
+    // User-drawn map regions (top X-Y view): measured-FOV / coverage areas.
+    regions:[],
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
@@ -1303,6 +1323,7 @@ function drawScene(){
   drawDoor(openDeg,side,{fill:"rgba(230,237,243,.12)",stroke:"#e6edf3",lw:2});
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
+  drawRegions();
   drawObstacles();
   drawProximityLines();
   drawTestPoints();
@@ -1645,6 +1666,212 @@ function draw3DScene(){
 }
 
 /* ====================== 5. UI PANELS / BINDING ====================== */
+/* ====================== MAP REGIONS (top X-Y view) ======================
+   User-drawn polygonal regions on the top view — e.g. the measured FOV area.
+   Region points are stored in top-plane coords {x:X fore-aft, y:Y horiz}, the
+   same coords the top view renders. Supports add / edit (drag, insert, delete
+   corners) / colour / fill / opacity / area readout. Regions persist in the
+   project JSON. Drawing/editing only happens on a Top pane. */
+const REGION_PALETTE=["#f85149","#39d353","#4da3ff","#e3b341","#a371f7",
+  "#ff9800","#2dd4bf","#f778ba"];
+let regionMode=null;       // null | "draw" | "edit"
+let activeRegionId=null;   // region being drawn / edited
+let regionDragVtx=null;    // {r, i} vertex being dragged
+let regionDownScreen=null; // client {x,y} at last mousedown (click-vs-drag test)
+
+function newRegion(){
+  seq.r=(seq.r||0)+1;
+  const col=REGION_PALETTE[(seq.r-1)%REGION_PALETTE.length];
+  return { id:"R"+seq.r, name:"Region "+seq.r, color:col,
+    points:[], fill:true, opacity:0.25, visible:true };
+}
+function activeRegion(){ return (project.regions||[]).find(r=>r.id===activeRegionId)||null; }
+// Enclosed area (mm²) via the shoelace formula, top-plane X-Y.
+function regionArea(r){
+  const p=r.points; if(!p||p.length<3) return 0;
+  let a=0; for(let i=0,j=p.length-1;i<p.length;j=i++) a+=p[j].x*p[i].y - p[i].x*p[j].y;
+  return Math.abs(a)/2;
+}
+function regionCentroid(pts){ let x=0,y=0; pts.forEach(p=>{x+=p.x;y+=p.y;});
+  return {x:x/pts.length, y:y/pts.length}; }
+function hexToRgba(hex,a){
+  hex=(hex||"#f85149").replace("#","");
+  if(hex.length===3) hex=hex.split("").map(c=>c+c).join("");
+  const n=parseInt(hex,16)||0;
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+// Ensure the top view is visible so regions can be drawn/seen.
+function ensureTopView(){
+  if(project.view.plane!=="top" && project.view.plane!=="split"){
+    setViewPlane("top"); $("viewPlane").value="top";
+  }
+}
+function addRegion(){
+  ensureTopView();
+  const r=newRegion(); project.regions.push(r);
+  regionMode="draw"; activeRegionId=r.id; regionDragVtx=null;
+  renderRegionList(); render();
+}
+function finishRegion(){
+  const r=activeRegion();
+  if(r && r.points.length<3)                    // discard degenerate region
+    project.regions=project.regions.filter(x=>x!==r);
+  regionMode=null; activeRegionId=null; regionDragVtx=null;
+  renderRegionList(); render();
+}
+function removeRegion(id){
+  project.regions=project.regions.filter(r=>r.id!==id);
+  if(activeRegionId===id){ regionMode=null; activeRegionId=null; regionDragVtx=null; }
+  renderRegionList(); render();
+}
+function editRegion(id){
+  if(regionMode==="edit" && activeRegionId===id){ regionMode=null; activeRegionId=null; }
+  else { ensureTopView(); regionMode="edit"; activeRegionId=id; regionDragVtx=null; }
+  renderRegionList(); render();
+}
+function updateRegStatus(){
+  const el=$("regStatus"), fb=$("regFinishBtn"); if(!el) return;
+  const r=activeRegion();
+  if(regionMode==="draw"){
+    el.textContent=`Drawing ${r?r.name:""}: ${r?r.points.length:0} point(s) — `
+      +`click the top view to add, double-click or Finish to close.`;
+    if(fb) fb.style.display="inline-block";
+  } else if(regionMode==="edit"){
+    el.textContent=`Editing ${r?r.name:""} — drag corners · drag an edge to insert `
+      +`· right-click a corner to delete.`;
+    if(fb) fb.style.display="none";
+  } else { el.textContent=""; if(fb) fb.style.display="none"; }
+}
+function renderRegionList(){
+  const el=$("regionList"); if(!el) return;
+  if(!project.regions || !project.regions.length){
+    el.innerHTML='<p class="mini">No regions yet. Click “+ Add region”, then click the top view.</p>';
+    updateRegStatus(); return;
+  }
+  el.innerHTML="";
+  project.regions.forEach(r=>{
+    const areaM2=(regionArea(r)/1e6).toFixed(2);
+    const editing = regionMode==="edit" && activeRegionId===r.id;
+    const d=document.createElement("div"); d.className="list-item";
+    if(activeRegionId===r.id && regionMode) d.style.borderColor=r.color;
+    d.innerHTML=`
+      <div class="top"><strong style="color:${r.color}">${r.id}</strong>
+        <span>
+          <button onclick="editRegion('${r.id}')">${editing?"Done":"Edit"}</button>
+          <button onclick="removeRegion('${r.id}')">✕</button>
+        </span></div>
+      <div class="row">
+        <div class="field"><label>Name</label>
+          <input data-k="name" value="${(r.name||"").replace(/"/g,'&quot;')}"></div>
+        <div class="field" style="max-width:64px"><label>Color</label>
+          <input type="color" data-k="color" value="${r.color}" style="padding:2px;height:30px"></div>
+      </div>
+      <div class="row" style="align-items:center">
+        <label class="mini"><input type="checkbox" data-k="fill" ${r.fill?"checked":""}> Fill</label>
+        <label class="mini"><input type="checkbox" data-k="visible" ${r.visible?"checked":""}> Show</label>
+        <div class="field" style="flex:1"><label>Fill opacity</label>
+          <input type="range" min="0" max="1" step="0.05" data-k="opacity" value="${r.opacity}"></div>
+      </div>
+      <p class="mini">${r.points.length} point(s) · area <b>${areaM2} m²</b></p>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>{
+      const ev = inp.type==="checkbox" ? "change" : "input";
+      inp.addEventListener(ev,()=>{
+        const k=inp.dataset.k;
+        r[k]= inp.type==="checkbox"?inp.checked
+            : inp.type==="range"?parseFloat(inp.value)
+            : inp.value;
+        render(); // live redraw; list not rebuilt so inputs keep focus
+      });
+    });
+    el.appendChild(d);
+  });
+  updateRegStatus();
+}
+// Draw all regions on the current pane (top view only).
+function drawRegions(){
+  if(curPlane!=="top" || !project.regions) return;
+  for(const r of project.regions){
+    const isActive = activeRegionId===r.id && !!regionMode;
+    if(!r.visible && !isActive) continue;
+    const pts=r.points; if(!pts.length) continue;
+    const scr=pts.map(worldToScreen);
+    const drawingThis = regionMode==="draw" && activeRegionId===r.id;
+    // fill (closed polygons only)
+    if(r.fill && pts.length>=3){
+      ctx.beginPath();
+      scr.forEach((q,i)=>i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y));
+      ctx.closePath();
+      ctx.fillStyle=hexToRgba(r.color, r.opacity); ctx.fill();
+    }
+    // outline (open polyline while still drawing)
+    ctx.beginPath();
+    scr.forEach((q,i)=>i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y));
+    if(!drawingThis && pts.length>=3) ctx.closePath();
+    ctx.strokeStyle=r.color; ctx.lineWidth=isActive?2:1.5; ctx.stroke();
+    // corner handles when active
+    if(isActive) scr.forEach(q=>{ ctx.beginPath(); ctx.arc(q.x,q.y,4,0,7);
+      ctx.fillStyle="#0a0d11"; ctx.fill(); ctx.strokeStyle=r.color; ctx.lineWidth=1.5; ctx.stroke(); });
+    // label + area at centroid
+    const c=worldToScreen(regionCentroid(pts));
+    ctx.fillStyle=r.color; ctx.font="11px sans-serif";
+    ctx.fillText(r.name + (pts.length>=3? "  "+(regionArea(r)/1e6).toFixed(2)+" m²":""),
+      c.x+6, c.y-6);
+  }
+}
+// The top-view pane canvas (right pane in split, else the single pane).
+function topCanvas(){ return project.view.plane==="split" ? cv2El : cvEl; }
+// Point the render target at a canvas+pane so world<->screen maths line up.
+function useTopPane(canvas){
+  const info=paneInfo(canvas), rect=canvas.getBoundingClientRect();
+  W=rect.width; H=rect.height; curView=info.view; curPlane=info.plane;
+  return {info, rect};
+}
+// Hit-test a region against screen coords: a corner, then an edge.
+function regionHit(r, sx, sy){
+  const pts=r.points; if(!pts.length) return null;
+  for(let i=0;i<pts.length;i++){ const q=worldToScreen(pts[i]);
+    if(Math.hypot(q.x-sx,q.y-sy)<=7) return {type:"vertex", i}; }
+  const n=pts.length, lim = n>=3 ? n : n-1;
+  for(let i=0;i<lim;i++){ const a=worldToScreen(pts[i]), b=worldToScreen(pts[(i+1)%n]);
+    if(distPointSeg({x:sx,y:sy}, a, b)<=6){
+      const w=screenToWorld(sx,sy);
+      return {type:"edge", i, point:{x:Math.round(w.x), y:Math.round(w.y)}}; } }
+  return null;
+}
+// Draw-mode click: add a corner (ignored if the gesture was a pan-drag).
+function onRegionClick(canvas,e){
+  if(regionMode!=="draw") return;
+  const {info,rect}=useTopPane(canvas);
+  if(info.plane!=="top") return;
+  if(regionDownScreen && Math.hypot(e.clientX-regionDownScreen.x,
+     e.clientY-regionDownScreen.y)>5) return;                // it was a pan
+  const r=activeRegion(); if(!r) return;
+  const w=screenToWorld(e.clientX-rect.left, e.clientY-rect.top);
+  r.points.push({x:Math.round(w.x), y:Math.round(w.y)});
+  renderRegionList(); render();
+}
+// Double-click ends drawing; drop the duplicate corner the 2nd click added.
+function onRegionDblClick(canvas,e){
+  if(regionMode!=="draw") return;
+  const r=activeRegion();
+  if(r){ const n=r.points.length;
+    if(n>=2){ const a=r.points[n-1], b=r.points[n-2];
+      if(Math.abs(a.x-b.x)<2 && Math.abs(a.y-b.y)<2) r.points.pop(); } }
+  finishRegion();
+}
+// Edit-mode right-click: delete the corner under the cursor.
+function onRegionRightClick(canvas,e){
+  if(regionMode!=="edit") return false;
+  const {info,rect}=useTopPane(canvas);
+  if(info.plane!=="top") return false;
+  const r=activeRegion(); if(!r) return false;
+  const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
+  for(let i=0;i<r.points.length;i++){ const q=worldToScreen(r.points[i]);
+    if(Math.hypot(q.x-sx,q.y-sy)<=7){ r.points.splice(i,1);
+      renderRegionList(); render(); return true; } }
+  return false;
+}
+
 function $(id){return document.getElementById(id);}
 function bindTabs(){
   $("tabs").addEventListener("click",e=>{
@@ -1652,6 +1879,7 @@ function bindTabs(){
     document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active",x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
     if(b.dataset.tab==="results") renderTpTable();
+    if(b.dataset.tab==="regions") renderRegionList();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
@@ -2415,6 +2643,11 @@ function normalizeLoaded(data){
   pj.door = Object.assign(defaultProject().door, data.door||{});
   pj.timing = Object.assign(defaultProject().timing, data.timing||{});
   pj.eval = Object.assign(defaultProject().eval, data.eval||{});
+  // Map regions: backfill per-region defaults for forward/backward compatibility.
+  pj.regions = Array.isArray(data.regions) ? data.regions.map((r,i)=>Object.assign(
+    { id:"R"+(i+1), name:"Region "+(i+1), color:REGION_PALETTE[i%REGION_PALETTE.length],
+      points:[], fill:true, opacity:0.25, visible:true },
+    r, { points:Array.isArray(r&&r.points)?r.points:[] })) : [];
   pj.view = Object.assign(defaultProject().view, data.view||{});
   if(!["front","top","split","3d"].includes(pj.view.plane))
     pj.view.plane="front";
@@ -2442,7 +2675,9 @@ function importJson(){
     const rd=new FileReader();
     rd.onload=()=>{ try{
         project = normalizeLoaded(JSON.parse(rd.result));
-        seq={s:project.sensors.length,o:project.obstacles.length,t:project.testPoints.length};
+        regionMode=null; activeRegionId=null; regionDragVtx=null;
+        seq={s:project.sensors.length,o:project.obstacles.length,t:project.testPoints.length,
+          r:project.regions.reduce((m,x)=>Math.max(m,parseInt(String(x.id).replace(/\D/g,""))||0),0)};
         loadAllUi(); recomputeAll(); render();
       }catch(e){ alert("Invalid JSON: "+e.message); } };
     rd.readAsText(f); };
@@ -2487,7 +2722,7 @@ function exportPng(){
 function loadAllUi(){
   loadProjectFields(); loadDoorFields();
   renderSensorList(); renderObstacleList(); refreshObstacleSelect();
-  renderSinglePointsList(); renderTpTable();
+  renderSinglePointsList(); renderTpTable(); renderRegionList();
   $("doorPct").value=project.view.doorPct;
   $("viewPlane").value=project.view.plane||"front";
   updateDoorPctLabel();
@@ -2517,7 +2752,9 @@ function toggleProxLines(){
 }
 function newProject(){
   if(!confirm("Start a new project? Unsaved data will be lost.")) return;
-  project=defaultProject(); seq={s:1,o:1,t:0}; loadAllUi(); recomputeAll(); render();
+  project=defaultProject(); seq={s:1,o:1,t:0,r:0};
+  regionMode=null; activeRegionId=null; regionDragVtx=null;
+  loadAllUi(); recomputeAll(); render();
 }
 function resizeCanvas(){ render(); }
 // The {plane, view} shown by a given canvas element (accounts for split).
@@ -2558,15 +2795,31 @@ function tick3d(){
 function start3dLoop(){ dirty3d=true; if(!loop3d){ loop3d=true; requestAnimationFrame(tick3d); } }
 function bindCanvas(){
   [cvEl,cv2El].forEach(canvas=>{
-    canvas.addEventListener("contextmenu",e=>{ if(project.view.plane==="3d") e.preventDefault(); });
+    canvas.addEventListener("contextmenu",e=>{
+      if(project.view.plane==="3d"){ e.preventDefault(); return; }
+      if(regionMode==="edit" && onRegionRightClick(canvas,e)) e.preventDefault();
+    });
     canvas.addEventListener("wheel",e=>{ e.preventDefault();
       if(project.view.plane==="3d"){ zoom3dToCursor(canvas,e); return; }
       const v=paneInfo(canvas).view, f=e.deltaY<0?1.1:1/1.1;
       v.zoom=Math.max(0.01,Math.min(2,v.zoom*f)); render();
     },{passive:false});
     canvas.addEventListener("mousedown",e=>onCanvasDown(canvas,e));
+    canvas.addEventListener("click",e=>onRegionClick(canvas,e));
+    canvas.addEventListener("dblclick",e=>onRegionDblClick(canvas,e));
   });
-  window.addEventListener("mousemove",e=>{ if(!drag)return;
+  window.addEventListener("mousemove",e=>{
+    if(regionDragVtx){                                    // drag a region corner
+      const canvas=topCanvas();
+      if(project.view.plane==="top"||project.view.plane==="split"){
+        const {rect}=useTopPane(canvas);
+        const w=screenToWorld(e.clientX-rect.left, e.clientY-rect.top);
+        regionDragVtx.r.points[regionDragVtx.i]={x:Math.round(w.x), y:Math.round(w.y)};
+        render();
+      }
+      return;
+    }
+    if(!drag)return;
     if(drag.mode==="orbit3d"){ orbitVel.az -= (e.clientX-drag.x)*ROT3D;
       orbitVel.polar -= (e.clientY-drag.y)*ROT3D; drag.x=e.clientX; drag.y=e.clientY;
       start3dLoop(); return; }
@@ -2575,7 +2828,8 @@ function bindCanvas(){
     drag.view.panX=drag.px+(e.clientX-drag.x);
     drag.view.panY=drag.py+(e.clientY-drag.y); render();
   });
-  window.addEventListener("mouseup",()=>{ drag=null; dragging3d=false; });
+  window.addEventListener("mouseup",()=>{ drag=null; dragging3d=false;
+    if(regionDragVtx){ regionDragVtx=null; renderRegionList(); } });
 }
 function pan3d(dx,dy){
   const v=project.view3d, b=cam3Basis(), wpp=v.dist/cam3f();
@@ -2604,6 +2858,7 @@ function nearestTestPointScreen(sx,sy){
   return best;
 }
 function onCanvasDown(canvas,e){
+  regionDownScreen={x:e.clientX, y:e.clientY};   // for click-vs-drag in draw mode
   if(project.view.plane==="3d"){
     // Move-obstacle mode: left-click snaps the selected object to the nearest
     // of the 21 test points (same object motion as top view, but in 3D).
@@ -2622,6 +2877,23 @@ function onCanvasDown(canvas,e){
     return;
   }
   const info=paneInfo(canvas);
+  // ---- Map-region interaction (top view) ----
+  if(regionMode==="edit" && info.plane==="top" && e.button===0){
+    const r=activeRegion();
+    if(r){ useTopPane(canvas); const rect=canvas.getBoundingClientRect();
+      const hit=regionHit(r, e.clientX-rect.left, e.clientY-rect.top);
+      if(hit && hit.type==="vertex"){ regionDragVtx={r, i:hit.i}; return; }
+      if(hit && hit.type==="edge"){ r.points.splice(hit.i+1,0,hit.point);
+        regionDragVtx={r, i:hit.i+1}; renderRegionList(); render(); return; }
+    }
+    // no corner/edge under cursor → pan (don't add a test point while editing)
+    drag={x:e.clientX,y:e.clientY,view:info.view,px:info.view.panX,py:info.view.panY};
+    return;
+  }
+  if(regionMode==="draw" && info.plane==="top"){    // pan-drag; corner added on click
+    drag={x:e.clientX,y:e.clientY,view:info.view,px:info.view.panX,py:info.view.panY};
+    return;
+  }
   if($("clickAdd").checked){
     const r=canvas.getBoundingClientRect();
     W=r.width; H=r.height; curView=info.view; curPlane=info.plane;
@@ -2795,7 +3067,7 @@ function bindSidebarResize(){
   window.addEventListener("mouseup",()=>{ if(dragging){ dragging=false; handle.classList.remove("active"); } });
 }
 function init(){
-  project=defaultProject(); seq={s:1,o:1,t:0};
+  project=defaultProject(); seq={s:1,o:1,t:0,r:0};
   bindTabs(); bindProject(); bindDoor(); bindCanvas(); bindToolbar();
   bindSidebarResize();
   loadAllUi(); recomputeAll();
