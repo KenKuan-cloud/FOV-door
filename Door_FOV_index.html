@@ -21,6 +21,7 @@
   --canvas-bg:#0a0d11; --grid-minor:#161b22; --grid-major:#2b3644;
   --axis:#30363d; --ground:#3a4757; --handle-fill:#0a0d11;
   --on-accent:#04121f;
+  --overlay-strong:rgba(23,28,35,.9); --overlay-soft:rgba(23,28,35,.7);
 }
 :root[data-theme="light"]{
   --bg:#f5f7fa; --panel:#ffffff; --panel2:#eef2f7; --line:#d4dbe4;
@@ -30,6 +31,7 @@
   --canvas-bg:#ffffff; --grid-minor:#e7ecf2; --grid-major:#c8d2de;
   --axis:#b0bac6; --ground:#8a97a6; --handle-fill:#ffffff;
   --on-accent:#ffffff;
+  --overlay-strong:rgba(255,255,255,.9); --overlay-soft:rgba(255,255,255,.75);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -98,8 +100,8 @@ button.primary{background:var(--accent);color:var(--on-accent);border-color:var(
 #pane2{border-left:1px solid var(--line)}
 canvas{display:block;width:100%;height:100%}
 .pane-label{position:absolute;top:8px;left:10px;font-size:11px;color:var(--muted);
-  background:rgba(23,28,35,.7);padding:2px 7px;border-radius:5px}
-.legend{position:absolute;top:10px;right:10px;background:rgba(23,28,35,.9);
+  background:var(--overlay-soft);padding:2px 7px;border-radius:5px}
+.legend{position:absolute;top:10px;right:10px;background:var(--overlay-strong);
   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px}
 .legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
