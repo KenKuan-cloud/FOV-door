@@ -17,6 +17,19 @@
   --ink:#e6edf3; --muted:#93a1b0; --accent:#4da3ff;
   --green:#39d353; --yellow:#e3b341; --red:#f85149; --orange:#ff9800;
   --gray:#6e7681; --blue:#4da3ff; --purple:#a371f7;
+  /* canvas / scene colours (read from JS via cssVar) */
+  --canvas-bg:#0a0d11; --grid-minor:#161b22; --grid-major:#2b3644;
+  --axis:#30363d; --ground:#3a4757; --handle-fill:#0a0d11;
+  --on-accent:#04121f;
+}
+:root[data-theme="light"]{
+  --bg:#f5f7fa; --panel:#ffffff; --panel2:#eef2f7; --line:#d4dbe4;
+  --ink:#1b232c; --muted:#5a6673; --accent:#1f6feb;
+  --green:#1a7f37; --yellow:#9a6700; --red:#cf222e; --orange:#bc4c00;
+  --gray:#8b949e; --blue:#1f6feb; --purple:#8250df;
+  --canvas-bg:#ffffff; --grid-minor:#e7ecf2; --grid-major:#c8d2de;
+  --axis:#b0bac6; --ground:#8a97a6; --handle-fill:#ffffff;
+  --on-accent:#ffffff;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -30,7 +43,7 @@ header .spacer{flex:1}
 button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
   border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}
 button:hover{border-color:var(--accent)}
-button.primary{background:var(--accent);color:#04121f;border-color:var(--accent);font-weight:600}
+button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600}
 .layout{display:grid;grid-template-columns:340px 4px 1fr;height:calc(100vh - 47px)}
 .resize-handle{background:var(--line);cursor:col-resize;position:relative;z-index:2}
 .resize-handle:hover,.resize-handle.active{background:var(--accent)}
@@ -40,7 +53,7 @@ button.primary{background:var(--accent);color:#04121f;border-color:var(--accent)
 /* sidebar tabs — grouped */
 .tabs{display:flex;flex-wrap:wrap;gap:3px;padding:8px;border-bottom:1px solid var(--line);align-items:center}
 .tabs button{padding:5px 9px;font-size:11px}
-.tabs button.active{background:var(--accent);color:#04121f;border-color:var(--accent)}
+.tabs button.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .tabgroup-label{width:100%;font-size:9px;font-weight:600;letter-spacing:.08em;
   text-transform:uppercase;color:var(--muted);margin:6px 2px 1px}
 .tabgroup-label:first-child{margin-top:0}
@@ -80,7 +93,7 @@ button.primary{background:var(--accent);color:#04121f;border-color:var(--accent)
 .toolbar label{color:var(--muted);font-size:11px}
 #doorPct{width:150px}
 
-.canvas-wrap{position:relative;flex:1;min-height:0;background:#0a0d11;display:flex}
+.canvas-wrap{position:relative;flex:1;min-height:0;background:var(--canvas-bg);display:flex}
 .canvas-pane{position:relative;flex:1;min-width:0;min-height:0}
 #pane2{border-left:1px solid var(--line)}
 canvas{display:block;width:100%;height:100%}
@@ -141,6 +154,7 @@ a.dl{color:var(--accent)}
   <button onclick="exportCsv()">Export CSV</button>
   <button onclick="exportPng()">Export PNG</button>
   <span class="hbar-sep"></span>
+  <button id="themeToggle" onclick="toggleTheme()" title="Toggle light / dark mode">🌙 Dark</button>
 </header>
 
 <div class="layout">
@@ -991,8 +1005,31 @@ function polyPath(poly){
 }
 function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 
+/* ---- light / dark theme ---- */
+function applyTheme(mode){
+  const light = mode==="light";
+  if(light) document.documentElement.setAttribute("data-theme","light");
+  else document.documentElement.removeAttribute("data-theme");
+  const btn=document.getElementById("themeToggle");
+  if(btn) btn.textContent = light ? "☀️ Light" : "🌙 Dark";
+  try{ localStorage.setItem("wds-theme", mode); }catch(e){}
+  // Redraw canvases so scene colours follow the theme (guarded: the app
+  // may not be fully initialised yet on first call).
+  if(window.__appReady){ try{ render(); }catch(e){} }
+}
+function toggleTheme(){
+  const isLight=document.documentElement.getAttribute("data-theme")==="light";
+  applyTheme(isLight ? "dark" : "light");
+}
+(function initTheme(){
+  let saved=null;
+  try{ saved=localStorage.getItem("wds-theme"); }catch(e){}
+  if(!saved && window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) saved="light";
+  applyTheme(saved==="light" ? "light" : "dark");
+})();
+
 function drawGrid(){
-  ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=cssVar("--canvas-bg"); ctx.fillRect(0,0,W,H);
   drawHeatmap(); // coloured distance zones (click Heatmap to compute)
   const cell=gridCellMm, major=cell*5;
   const s=curView.zoom;
@@ -1005,7 +1042,7 @@ function drawGrid(){
 
   // minor gridlines — skip when too dense
   if(cellPx>=3){
-    ctx.strokeStyle="#161b22"; ctx.lineWidth=0.5;
+    ctx.strokeStyle=cssVar("--grid-minor"); ctx.lineWidth=0.5;
     ctx.beginPath();
     for(let gy=minX; gy<=maxX; gy+=cell){
       const a=worldToScreen({x:gy,y:minZ}), b=worldToScreen({x:gy,y:maxZ});
@@ -1019,7 +1056,7 @@ function drawGrid(){
   }
 
   // major gridlines (every 5 cells)
-  ctx.strokeStyle="#2b3644"; ctx.lineWidth=1;
+  ctx.strokeStyle=cssVar("--grid-major"); ctx.lineWidth=1;
   ctx.beginPath();
   for(let gy=-Math.ceil(spanY/major)*major; gy<=Math.ceil(spanY/major)*major; gy+=major){
     const a=worldToScreen({x:gy,y:minZ}), b=worldToScreen({x:gy,y:maxZ});
@@ -1057,14 +1094,14 @@ function drawGrid(){
 
   const top=curPlane==="top";
   if(!top){ // ground line at Z=0 (front view only)
-    ctx.strokeStyle="#3a4757"; ctx.lineWidth=1.5; ctx.beginPath();
+    ctx.strokeStyle=cssVar("--ground"); ctx.lineWidth=1.5; ctx.beginPath();
     const g0=worldToScreen({x:minX,y:0}), g1=worldToScreen({x:maxX,y:0});
     ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
     ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif"; ctx.textAlign="left";
     ctx.fillText("ground  Z=0", g1.x-90, g1.y-5);
   }
   // axes
-  ctx.strokeStyle="#30363d"; ctx.lineWidth=1.5; ctx.beginPath();
+  ctx.strokeStyle=cssVar("--axis"); ctx.lineWidth=1.5; ctx.beginPath();
   const ah=worldToScreen({x:2500,y:0}), ah0=worldToScreen({x:-2500,y:0});
   const av=worldToScreen({x:0,y:2500}), av0=worldToScreen({x:0,y:-200});
   ctx.moveTo(ah0.x,ah0.y); ctx.lineTo(ah.x,ah.y);
@@ -1504,7 +1541,7 @@ function sweptFov3dFaces(door, side){
 }
 function draw3DScene(){
   cur3B=cam3Basis();
-  ctx.fillStyle="#0a0d11"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=cssVar("--canvas-bg"); ctx.fillRect(0,0,W,H);
   const d=project.door, side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
   // ground floor + grid at z=0 (matches the 2D top-view grid resolution)
@@ -1825,7 +1862,7 @@ function drawRegions(){
     ctx.strokeStyle=r.color; ctx.lineWidth=isActive?2:1.5; ctx.stroke();
     // corner handles when active
     if(isActive) scr.forEach(q=>{ ctx.beginPath(); ctx.arc(q.x,q.y,4,0,7);
-      ctx.fillStyle="#0a0d11"; ctx.fill(); ctx.strokeStyle=r.color; ctx.lineWidth=1.5; ctx.stroke(); });
+      ctx.fillStyle=cssVar("--handle-fill"); ctx.fill(); ctx.strokeStyle=r.color; ctx.lineWidth=1.5; ctx.stroke(); });
     // label + area at centroid
     const c=worldToScreen(regionCentroid(pts));
     ctx.fillStyle=r.color; ctx.font="11px sans-serif";
@@ -2726,7 +2763,7 @@ function exportPng(){
     const tmp=document.createElement("canvas");
     tmp.width=c1.width+c2.width+gap; tmp.height=Math.max(c1.height,c2.height);
     const t=tmp.getContext("2d");
-    t.fillStyle="#0a0d11"; t.fillRect(0,0,tmp.width,tmp.height);
+    t.fillStyle=cssVar("--canvas-bg"); t.fillRect(0,0,tmp.width,tmp.height);
     t.drawImage(c1,0,0); t.drawImage(c2,c1.width+gap,0);
     tmp.toBlob(save);
     return;
@@ -3117,6 +3154,7 @@ function init(){
   window.addEventListener("resize",resizeCanvas);
   resizeCanvas();
   runSelfTests();
+  window.__appReady=true;
 }
 init();
 </script>
