@@ -26,7 +26,7 @@
   /* door/wall geometry ink (RGB triple, alpha applied in JS via geo()) */
   --geo-rgb:230,237,243;
   /* 3D scene floor/grid/axes */
-  --scene-ground:rgba(60,80,110,.14); --scene-grid-minor:#1c2530;
+  --scene-ground:rgba(60,80,110,.14); --scene-ground-solid:#172231; --scene-grid-minor:#1c2530;
   --scene-grid-major:#33465c; --scene-axis:#5a6b7b; --scene-label:rgba(180,200,225,.55);
 }
 :root[data-theme="light"]{
@@ -40,7 +40,7 @@
   --on-accent:#ffffff;
   --overlay-strong:rgba(255,255,255,.9); --overlay-soft:rgba(255,255,255,.75);
   --geo-rgb:44,54,68;
-  --scene-ground:rgba(120,140,170,.12); --scene-grid-minor:#c4ccd6;
+  --scene-ground:rgba(120,140,170,.12); --scene-ground-solid:#e3e9f1; --scene-grid-minor:#c4ccd6;
   --scene-grid-major:#98a6b6; --scene-axis:#6b7a8b; --scene-label:rgba(70,85,105,.8);
 }
 *{box-sizing:border-box}
@@ -426,6 +426,8 @@ a.dl{color:var(--accent)}
           <label><input type="checkbox" id="showSwept"> Swept envelope</label>
           <label><input type="checkbox" id="showGhost"> Swept FOV</label>
           <label><input type="checkbox" id="showSweptFov3d" onchange="render()"> 3D swept FOV</label>
+          <label title="Hide portions of 3D sensor beams below ground level"><input type="checkbox" id="clipFovGround3d" onchange="render()"> Clip FOV at Z=0</label>
+          <label title="Make the 3D ground plane opaque so it occludes geometry below it"><input type="checkbox" id="solidFloor3d" onchange="render()"> Solid 3D floor</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
           <label><input type="checkbox" id="showTpIds"> Point IDs</label>
         </div>
@@ -1582,6 +1584,38 @@ function sensorConeFaces(s,openDeg,side){
   }
   return {faces, apex, axisEnd, crossLines};
 }
+// Clip a 3D polygon against the ground half-space. Intersections are inserted
+// on z=0, so cone sides and the rounded cap terminate cleanly at the floor.
+function clipPolyAboveGround(pts){
+  const out=[];
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i], b=pts[(i+1)%pts.length], ain=a.z>=0, bin=b.z>=0;
+    if(ain) out.push(a);
+    if(ain!==bin){ const t=(0-a.z)/(b.z-a.z);
+      out.push({x:a.x+t*(b.x-a.x),y:a.y+t*(b.y-a.y),z:0}); }
+  }
+  return out;
+}
+function clipFovFacesAboveGround(faces){
+  const out=[];
+  for(const face of faces){ const pts=clipPolyAboveGround(face.pts);
+    if(pts.length>=3) out.push({...face,pts}); }
+  return out;
+}
+function fovGroundClipEnabled(){
+  const el=$("clipFovGround3d"); return !!(el&&el.checked);
+}
+// Draw a beam guide segment, optionally trimming it at z=0 with the volume.
+function line3Fov(a,b,stroke,lw){
+  if(!fovGroundClipEnabled()){ line3(a,b,stroke,lw); return; }
+  if(a.z<0&&b.z<0) return;
+  let aa=a, bb=b;
+  if((a.z<0)!==(b.z<0)){ const t=(0-a.z)/(b.z-a.z);
+    const q={x:a.x+t*(b.x-a.x),y:a.y+t*(b.y-a.y),z:0};
+    if(a.z<0) aa=q; else bb=q;
+  }
+  line3(aa,bb,stroke,lw);
+}
 function sweptFov3dFaces(door, side){
   const faces=[], N=20, steps=[];
   for(let pct=0;pct<=100;pct+=5) steps.push(pct);
@@ -1639,7 +1673,9 @@ function draw3DScene(){
   const fc=[{x:-g,y:-g,z:0},{x:g,y:-g,z:0},{x:g,y:g,z:0},{x:-g,y:g,z:0}];
   ctx.beginPath();
   fc.forEach((p,i)=>{ const q=project3D(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
-  ctx.closePath(); ctx.fillStyle=cssVar("--scene-ground"); ctx.fill();
+  ctx.closePath();
+  const solidFloor=$("solidFloor3d")&&$("solidFloor3d").checked;
+  if(!solidFloor){ ctx.fillStyle=cssVar("--scene-ground"); ctx.fill(); }
   // grid lines: minor at gridCellMm, major every 5 cells (guard against too many)
   const cell=gridCellMm, major=cell*5;
   const nDiv=2*g/cell;
@@ -1677,11 +1713,13 @@ function draw3DScene(){
   faces=faces.concat(doorPrismFaces(openDeg,side));
   const apexes=[];
   for(const s of project.sensors){ if(!s.active) continue;
-    const fr=sensorConeFaces(s,openDeg,side); faces=faces.concat(fr.faces);
+    const fr=sensorConeFaces(s,openDeg,side);
+    faces=faces.concat(fovGroundClipEnabled()?clipFovFacesAboveGround(fr.faces):fr.faces);
     apexes.push({s,apex:fr.apex,axisEnd:fr.axisEnd,crossLines:fr.crossLines}); }
   // Swept FOV 3D: cone envelope across all door positions
   if($("showSweptFov3d")&&$("showSweptFov3d").checked){
-    faces=faces.concat(sweptFov3dFaces(d,side));
+    const swept=sweptFov3dFaces(d,side);
+    faces=faces.concat(fovGroundClipEnabled()?clipFovFacesAboveGround(swept):swept);
   }
   // obstacles — type-aware 3D shapes, grounded at z=0 except Hanging object
   for(const o of project.obstacles){
@@ -1732,18 +1770,21 @@ function draw3DScene(){
   }
   // Door photo draped on the panel (depth-sorted with everything else)
   faces=faces.concat(doorImageFaces(d, openDeg, side));
+  // In solid mode the floor participates in painter sorting, allowing it to
+  // occlude below-ground geometry when the camera is above Z=0.
+  if(solidFloor) faces.push({pts:fc,fill:cssVar("--scene-ground-solid"),stroke:null,lw:0});
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
   faces.sort((a,b)=>b.depth-a.depth);
   faces.forEach(fc=> fc.tex ? drawTexQuad(fc) : face3(fc.pts, fc.fill, fc.stroke, fc.lw));
   // A subtle centre ray gives the translucent volume a clear sensing direction.
   apexes.forEach(({s,apex,axisEnd})=>{
-    if(s.showFov!==false && axisEnd) line3(apex,axisEnd,sensorColor(s)+"aa",1.25);
+    if(s.showFov!==false && axisEnd) line3Fov(apex,axisEnd,sensorColor(s)+"aa",1.25);
   });
   // Horizontal and vertical great-circle sections make the spherical range
   // boundary explicit and remain useful from every orbit-camera angle.
   apexes.forEach(({s,crossLines})=>{ if(s.showFov===false) return;
     (crossLines||[]).forEach(line=>{ for(let i=1;i<line.length;i++)
-      line3(line[i-1],line[i],sensorColor(s)+"e6",1.5); });
+      line3Fov(line[i-1],line[i],sensorColor(s)+"e6",1.5); });
   });
   // hinge (roof line along X)
   line3({x:d.hingeX-(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},
@@ -3244,6 +3285,9 @@ function runSelfTests(){
     radii.every(r=>Math.abs(r-dp.sensors[0].maxRangeMm)<1e-6)]);
   results.push(["3D FOV outer surface has horizontal + vertical cross lines",
     cg.crossLines.length===2 && cg.crossLines.every(line=>line.length===37)]);
+  const clipped=clipPolyAboveGround([{x:0,y:0,z:-2},{x:2,y:0,z:2},{x:0,y:2,z:2}]);
+  results.push(["3D FOV ground clipping inserts z=0 intersections",
+    clipped.length===4 && clipped.every(q=>q.z>=0) && clipped.filter(q=>q.z===0).length===2]);
   // 3D camera: spherical basis is orthonormal with world-up fixed (no roll).
   const cam=withProject(dp, ()=>{ project.view3d.az=-0.9; project.view3d.polar=0.95;
     const b=cam3Basis();
