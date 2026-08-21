@@ -34,7 +34,7 @@
   --ink:#1b232c; --muted:#5a6673; --accent:#1f6feb;
   --green:#1a7f37; --yellow:#9a6700; --red:#cf222e; --orange:#bc4c00;
   --gray:#8b949e; --blue:#1f6feb; --purple:#8250df;
-  --canvas-bg:#eef4fa; --canvas-bg-top:#c4d7ee; --canvas-bg-bot:#f4f8fc;
+  --canvas-bg:#ffffff; --canvas-bg-top:#c4d7ee; --canvas-bg-bot:#f4f8fc;
   --grid-minor:#d5dce4; --grid-major:#a8b4c2;
   --axis:#7a8798; --ground:#5c6b7c; --handle-fill:#ffffff;
   --on-accent:#ffffff;
@@ -105,8 +105,7 @@ button.primary{background:var(--accent);color:var(--on-accent);border-color:var(
 .toolbar label{color:var(--muted);font-size:11px}
 #doorPct{width:150px}
 
-.canvas-wrap{position:relative;flex:1;min-height:0;
-  background:linear-gradient(180deg,var(--canvas-bg-top),var(--canvas-bg-bot));display:flex}
+.canvas-wrap{position:relative;flex:1;min-height:0;background:var(--canvas-bg);display:flex}
 .canvas-pane{position:relative;flex:1;min-width:0;min-height:0}
 #pane2{border-left:1px solid var(--line)}
 canvas{display:block;width:100%;height:100%}
@@ -1021,9 +1020,9 @@ function cssVar(n){return getComputedStyle(document.documentElement).getProperty
 function geo(a){return "rgba("+cssVar("--geo-rgb")+","+a+")";}
 // Paint a canvas background: vertical gradient (top→bottom) when the theme
 // defines distinct stops (light mode's CAD-style blue→white), else a flat fill.
-function paintBg(c,w,h){
+function paintBg(c,w,h,gradient){
   const top=cssVar("--canvas-bg-top"), bot=cssVar("--canvas-bg-bot");
-  if(top && bot && top!==bot){
+  if(gradient && top && bot && top!==bot){
     const g=c.createLinearGradient(0,0,0,h);
     g.addColorStop(0,top); g.addColorStop(1,bot); c.fillStyle=g;
   } else { c.fillStyle=cssVar("--canvas-bg"); }
@@ -1566,7 +1565,7 @@ function sweptFov3dFaces(door, side){
 }
 function draw3DScene(){
   cur3B=cam3Basis();
-  paintBg(ctx,W,H);
+  paintBg(ctx,W,H,true); // gradient background — 3D view only
   const d=project.door, side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
   // ground floor + grid at z=0 (matches the 2D top-view grid resolution)
