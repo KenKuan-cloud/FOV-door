@@ -272,9 +272,14 @@ a.dl{color:var(--accent)}
             <div class="field"><label>Projected Z shift on door (mm)</label>
               <input id="d_img_pz" type="number" value="0" oninput="setDoorImageAdjustment('projectZ',this.value)"></div>
           </div>
-          <div class="field"><label title="Mirror the ZX image along the vehicle X axis">
-            <input id="d_img_flip" type="checkbox" onchange="setDoorImageFlip(this.checked)">
-            Flip picture front ↔ rear</label></div>
+          <div class="row">
+            <div class="field"><label title="Show or hide only the original ZX reference-plane image">
+              <input id="d_img_source" type="checkbox" onchange="setDoorImageSourceVisible(this.checked)" checked>
+              Show ZX plane picture</label></div>
+            <div class="field"><label title="Mirror the ZX image along the vehicle X axis">
+              <input id="d_img_flip" type="checkbox" onchange="setDoorImageFlip(this.checked)">
+              Flip front ↔ rear</label></div>
+          </div>
           <div class="row">
             <div class="field"><label>Opacity</label>
               <input id="d_img_op" type="range" min="0" max="100" value="100"
@@ -1547,9 +1552,11 @@ function doorImageFaces(door, openDeg, side){
   const sourceS=cfg.flipX
     ? [{x:iw,y:0},{x:0,y:0},{x:0,y:ih},{x:iw,y:ih}]
     : [{x:0,y:0},{x:iw,y:0},{x:iw,y:ih},{x:0,y:ih}];
-  const faces=[{pts:[{x:srcX0,y:door.hingeY,z:srcZ1},{x:srcX1,y:door.hingeY,z:srcZ1},
-    {x:srcX1,y:door.hingeY,z:srcZ0},{x:srcX0,y:door.hingeY,z:srcZ0}],
-    tex:{img,op,sourcePlane:true,s:sourceS}}];
+  const faces=[];
+  if(cfg.showSource!==false) faces.push({
+    pts:[{x:srcX0,y:door.hingeY,z:srcZ1},{x:srcX1,y:door.hingeY,z:srcZ1},
+      {x:srcX1,y:door.hingeY,z:srcZ0},{x:srcX0,y:door.hingeY,z:srcZ0}],
+    tex:{img,op,sourcePlane:true,s:sourceS}});
   const uv=(x,localZ)=>{ let u=(x-projX0)/L*iw; if(cfg.flipX) u=iw-u;
     return {x:u,y:(projZTopLocal-localZ)/H*ih}; };
   for(let i=0;i<prof.length;i++){
@@ -2192,7 +2199,7 @@ function uploadDoorImage(inp){
       opacity:old.opacity!=null?old.opacity:1,
       sourceX:old.sourceX||0, sourceZ:old.sourceZ||0,
       projectX:old.projectX||0, projectZ:old.projectZ||0,
-      flipX:!!old.flipX};
+      flipX:!!old.flipX, showSource:old.showSource!==false};
     doorImgSrc=null; ensureDoorImg(); updateDoorImageUi(); render();
   };
   rd.readAsDataURL(f);
@@ -2217,6 +2224,11 @@ function setDoorImageFlip(flipped){
   project.door.image.flipX=!!flipped;
   render();
 }
+function setDoorImageSourceVisible(visible){
+  if(!project.door.image) return;
+  project.door.image.showSource=!!visible;
+  render();
+}
 function updateDoorImageUi(){
   const has=!!(project.door.image && project.door.image.src);
   const cfg=project.door.image||{}, st=$("d_img_status"), op=$("d_img_op");
@@ -2229,6 +2241,7 @@ function updateDoorImageUi(){
     d_img_px:cfg.projectX||0,d_img_pz:cfg.projectZ||0};
   for(const id in vals) if($(id)) $(id).value=vals[id];
   if($("d_img_flip")) $("d_img_flip").checked=!!cfg.flipX;
+  if($("d_img_source")) $("d_img_source").checked=cfg.showSource!==false;
 }
 function applyProfile(){
   const lines=$("d_profile").value.split(/\n+/).map(l=>l.trim()).filter(Boolean);
