@@ -591,12 +591,28 @@ function sensorPoseAtAngle(sensor, door, openDeg, side){
   const pos=doorLocalToPlane(sensor.posY, sensor.posZ, door, openDeg, side);
   const ang=doorWorldAngleRad(openDeg, door);
   const facing=ang + mir*deg2rad(sensor.yawDeg); // sensor main sensing direction
-  return { x:pos.x, y:pos.y, facing };
+  return { x:pos.x, y:pos.y, facing, pitch:sensor.pitchDeg||0 };
+}
+// Project the 3D beam axis [sin p, cos f·cos p, sin f·cos p] (X,Y,Z) into a view
+// plane and return {angle, scale}: the in-plane heading and the length fraction
+// that survives the projection (foreshortening). At pitch 0 this is a no-op
+// (front angle = facing, scale = 1), so unpitched sensors are unchanged.
+function beamProject(facing, pitchDeg, plane){
+  const p=deg2rad(pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
+  const ax=sp, ay=Math.cos(facing)*cp, az=Math.sin(facing)*cp; // X, Y, Z
+  return plane==="top"
+    ? { angle:Math.atan2(ay, ax), scale:Math.hypot(ax, ay) }   // X-Y view
+    : { angle:Math.atan2(az, ay), scale:Math.hypot(ay, az) };  // Y-Z (front) view
 }
 // Build FOV polygon (fan / cone) for a sensor pose. Returns vehicle-frame points.
 function fovPolygon(pose, hFovDeg, minRange, maxRange, segs=24){
+  // Centre on the beam's true heading in the front (Y-Z) plane and foreshorten
+  // the range by the fraction of the beam that lies in that plane, so pitch is
+  // honoured (incl. the direction flip when |pitch|>90°). pitch 0 → unchanged.
+  const proj=beamProject(pose.facing, pose.pitch, "front");
+  minRange*=proj.scale; maxRange*=proj.scale;
   const half=deg2rad(hFovDeg/2);
-  const a0=pose.facing-half, a1=pose.facing+half;
+  const a0=proj.angle-half, a1=proj.angle+half;
   const outer=[], inner=[];
   for(let i=0;i<=segs;i++){
     const a=a0+(a1-a0)*i/segs;
@@ -764,17 +780,11 @@ function doorFootprintTop(door, openDeg, side){
 // straight up/down this is ~0 (no horizontal coverage).
 function topForeshorten(sensor, door, openDeg, side){
   const pose=sensorPoseAtAngle(sensor, door, openDeg, side);
-  // Ground (X-Y) projection length of the unit beam axis
-  // [sin p, cos f·cos p, sin f·cos p]; pitch p tilts the beam fore-aft (+X).
-  const p=deg2rad(sensor.pitchDeg||0);
-  return Math.hypot(Math.sin(p), Math.cos(pose.facing)*Math.cos(p));
+  return beamProject(pose.facing, sensor.pitchDeg, "top").scale;
 }
-// Top-view projected beam center angle for a sensor (in X-Y plane).
-// 3D beam axis: [sin(pitch), cos(facing)*cos(pitch), sin(facing)*cos(pitch)].
-// Top-view projects to X=sin(pitch), Y=cos(facing)*cos(pitch).
+// Top-view projected beam centre angle for a sensor (in the X-Y plane).
 function sensorTopAngle(sensor, pose){
-  const p=deg2rad(sensor.pitchDeg||0);
-  return Math.atan2(Math.cos(pose.facing)*Math.cos(p), Math.sin(p));
+  return beamProject(pose.facing, sensor.pitchDeg, "top").angle;
 }
 // Top-view horizontal FOV fan (X-Y). Apex at sensor (X, current Y), centered on
 // the actual projected beam direction derived from yaw+pitch.
@@ -1187,7 +1197,7 @@ function drawSensor(s,openDeg,side){
   const top=curPlane==="top";
   const anchor = top ? {x:project.door.hingeX+s.posX, y:pose.x} : {x:pose.x, y:pose.y};
   const p=worldToScreen(anchor);
-  const fa = top ? sensorTopAngle(s, pose) : pose.facing;
+  const fa = top ? sensorTopAngle(s, pose) : beamProject(pose.facing, s.pitchDeg, "front").angle;
   const tip=worldToScreen({x:anchor.x+Math.cos(fa)*400, y:anchor.y+Math.sin(fa)*400});
   ctx.strokeStyle=c; ctx.lineWidth=2; ctx.beginPath();
   ctx.moveTo(p.x,p.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
