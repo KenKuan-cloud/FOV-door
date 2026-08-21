@@ -257,9 +257,21 @@ a.dl{color:var(--accent)}
         </div>
         <div class="group">
           <span class="group-cap">Door photo (3D)</span>
-          <div class="field"><label>Image draped on the door in the 3D view
-            (moves &amp; rotates with the door)</label>
+          <div class="field"><label>Image placed on the vehicle ZX reference plane
+            and projected along Y onto the door outer surface</label>
             <input id="d_img" type="file" accept="image/*" onchange="uploadDoorImage(this)"></div>
+          <div class="row">
+            <div class="field"><label>ZX source X shift (mm)</label>
+              <input id="d_img_sx" type="number" value="0" oninput="setDoorImageAdjustment('sourceX',this.value)"></div>
+            <div class="field"><label>ZX source Z shift (mm)</label>
+              <input id="d_img_sz" type="number" value="0" oninput="setDoorImageAdjustment('sourceZ',this.value)"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Projected X shift on door (mm)</label>
+              <input id="d_img_px" type="number" value="0" oninput="setDoorImageAdjustment('projectX',this.value)"></div>
+            <div class="field"><label>Projected Z shift on door (mm)</label>
+              <input id="d_img_pz" type="number" value="0" oninput="setDoorImageAdjustment('projectZ',this.value)"></div>
+          </div>
           <div class="row">
             <div class="field"><label>Opacity</label>
               <input id="d_img_op" type="range" min="0" max="100" value="100"
@@ -1492,28 +1504,52 @@ function drawTexQuad(fc){
   drawTexTri(t.img, [s[0],s[1],s[2]], [d[0],d[1],d[2]]);
   drawTexTri(t.img, [s[0],s[2],s[3]], [d[0],d[2],d[3]]);
   ctx.globalAlpha=prev;
+  if(t.sourcePlane){ ctx.beginPath(); d.forEach((q,i)=>i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y));
+    ctx.closePath(); ctx.strokeStyle=cssVar("--accent"); ctx.lineWidth=1.5; ctx.stroke(); }
 }
-// Build textured faces that drape the door photo over the door panel: image
-// width -> door length (X), image height -> door outline from hinge to edge.
+// Y intersections of the door section at a world Z height. The lateral-most
+// intersection is the outer surface hit by an orthographic projection from ZX.
+function doorSectionYAtZ(prof,z){
+  const ys=[];
+  for(let i=0;i<prof.length;i++){ const a=prof[i],b=prof[(i+1)%prof.length];
+    if((a.y<=z&&b.y>z)||(b.y<=z&&a.y>z)){
+      const t=(z-a.y)/(b.y-a.y); ys.push(a.x+t*(b.x-a.x)); }
+  }
+  return ys;
+}
+function isOuterDoorEdge(prof,i,side){
+  const a=prof[i],b=prof[(i+1)%prof.length], z=(a.y+b.y)/2;
+  const ys=doorSectionYAtZ(prof,z); if(!ys.length) return false;
+  const outer=side==="RH"?Math.max(...ys):Math.min(...ys);
+  return Math.abs((a.x+b.x)/2-outer)<1;
+}
+// Keep the original ZX reference image and its orthographic projection onto
+// the door's outboard skin. Source shifts move the reference plane image;
+// projection shifts then offset only the copy registered on the door.
 function doorImageFaces(door, openDeg, side){
   const img=ensureDoorImg(); if(!img) return [];
   const prof=doorPolygonAtAngle(door, openDeg, side); // [{x:Y,y:Z}...] at this angle
   if(prof.length<2) return [];
-  const L=door.lengthMm||1000, x0=door.hingeX-L/2, x1=door.hingeX+L/2;
+  const cfg=door.image||{}, L=door.lengthMm||1000, H=Math.max(1,door.heightMm||1250);
+  const sx=cfg.sourceX||0, sz=cfg.sourceZ||0, px=cfg.projectX||0, pz=cfg.projectZ||0;
+  const srcCx=door.hingeX+sx, srcCz=door.hingeZ-H/2+sz;
+  const srcX0=srcCx-L/2, srcX1=srcCx+L/2, srcZ0=srcCz-H/2, srcZ1=srcCz+H/2;
+  const projCx=srcCx+px, projCz=srcCz+pz;
+  const projX0=projCx-L/2, projZ1=projCz+H/2;
+  const x0=door.hingeX-L/2, x1=door.hingeX+L/2;
   const iw=img.naturalWidth, ih=img.naturalHeight;
-  const cum=[0]; for(let i=1;i<prof.length;i++)
-    cum.push(cum[i-1]+Math.hypot(prof[i].x-prof[i-1].x, prof[i].y-prof[i-1].y));
-  const total=cum[cum.length-1]||1;
-  const op=(door.image&&door.image.opacity!=null)?door.image.opacity:1;
-  const faces=[];
-  for(let i=0;i<prof.length-1;i++){
-    const Pa={x:x0,y:prof[i].x,  z:prof[i].y};
-    const Pb={x:x1,y:prof[i].x,  z:prof[i].y};
-    const Pc={x:x1,y:prof[i+1].x,z:prof[i+1].y};
-    const Pd={x:x0,y:prof[i+1].x,z:prof[i+1].y};
-    const v0=ih*cum[i]/total, v1=ih*cum[i+1]/total;
+  const op=cfg.opacity!=null?cfg.opacity:1;
+  const faces=[{pts:[{x:srcX0,y:door.hingeY,z:srcZ1},{x:srcX1,y:door.hingeY,z:srcZ1},
+    {x:srcX1,y:door.hingeY,z:srcZ0},{x:srcX0,y:door.hingeY,z:srcZ0}],
+    tex:{img,op,sourcePlane:true,s:[{x:0,y:0},{x:iw,y:0},{x:iw,y:ih},{x:0,y:ih}]}}];
+  const uv=p=>({x:(p.x-projX0)/L*iw,y:(projZ1-p.z)/H*ih});
+  for(let i=0;i<prof.length;i++){
+    if(!isOuterDoorEdge(prof,i,side)) continue;
+    const j=(i+1)%prof.length;
+    const Pa={x:x0,y:prof[i].x,z:prof[i].y}, Pb={x:x1,y:prof[i].x,z:prof[i].y};
+    const Pc={x:x1,y:prof[j].x,z:prof[j].y}, Pd={x:x0,y:prof[j].x,z:prof[j].y};
     faces.push({ pts:[Pa,Pb,Pc,Pd],
-      tex:{ img, op, s:[{x:0,y:v0},{x:iw,y:v0},{x:iw,y:v1},{x:0,y:v1}] } });
+      tex:{img,op,s:[uv(Pa),uv(Pb),uv(Pc),uv(Pd)]} });
   }
   return faces;
 }
@@ -2141,8 +2177,11 @@ function uploadDoorImage(inp){
   const f=inp.files && inp.files[0]; if(!f) return;
   const rd=new FileReader();
   rd.onload=()=>{
-    const op=(project.door.image && project.door.image.opacity!=null)?project.door.image.opacity:1;
-    project.door.image={src:rd.result, opacity:op};
+    const old=project.door.image||{};
+    project.door.image={src:rd.result,
+      opacity:old.opacity!=null?old.opacity:1,
+      sourceX:old.sourceX||0, sourceZ:old.sourceZ||0,
+      projectX:old.projectX||0, projectZ:old.projectZ||0};
     doorImgSrc=null; ensureDoorImg(); updateDoorImageUi(); render();
   };
   rd.readAsDataURL(f);
@@ -2157,14 +2196,22 @@ function setDoorImageOpacity(v){
   project.door.image.opacity=Math.max(0,Math.min(1,(+v)/100));
   render();
 }
+function setDoorImageAdjustment(key,v){
+  if(!project.door.image) return;
+  project.door.image[key]=Number.isFinite(+v)?+v:0;
+  render();
+}
 function updateDoorImageUi(){
   const has=!!(project.door.image && project.door.image.src);
-  const st=$("d_img_status"), op=$("d_img_op");
+  const cfg=project.door.image||{}, st=$("d_img_status"), op=$("d_img_op");
   if(st) st.textContent = has
-    ? "Image loaded — shown draped on the door in the 3D view."
-    : "No image. Tip: a straight-on photo of the door works best.";
+    ? "Image loaded — ZX reference and its movable door projection are both visible in 3D."
+    : "No image. Tip: use a straight-on image prepared in the ZX view.";
   if(op) op.value=Math.round(((project.door.image && project.door.image.opacity!=null)
     ? project.door.image.opacity : 1)*100);
+  const vals={d_img_sx:cfg.sourceX||0,d_img_sz:cfg.sourceZ||0,
+    d_img_px:cfg.projectX||0,d_img_pz:cfg.projectZ||0};
+  for(const id in vals) if($(id)) $(id).value=vals[id];
 }
 function applyProfile(){
   const lines=$("d_profile").value.split(/\n+/).map(l=>l.trim()).filter(Boolean);
@@ -3287,6 +3334,9 @@ function runSelfTests(){
   const dp=defaultProject();
   const pf=withProject(dp, ()=>doorPrismFaces(0,"LH"));
   results.push(["3D door prism face count", pf.length===2+dp.door.profile.length]);
+  const section=doorSectionYAtZ(doorPolygonAtAngle(dp.door,0,"LH"),dp.door.hingeZ-700);
+  results.push(["ZX projection finds inner + outer door-surface intersections",
+    section.length>=2 && Math.min(...section)<Math.max(...section)]);
   const fr=withProject(dp, ()=>sensorConeFaces(dp.sensors[0],0,"LH"));
   results.push(["3D FOV cone faces + apex", fr.faces.length>8 && isFinite(fr.apex.y)]);
   const cg=withProject(dp, ()=>sensorConeGeom(dp.sensors[0],dp.door,0,"LH",36));
