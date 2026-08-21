@@ -22,6 +22,11 @@
   --axis:#30363d; --ground:#3a4757; --handle-fill:#0a0d11;
   --on-accent:#04121f;
   --overlay-strong:rgba(23,28,35,.9); --overlay-soft:rgba(23,28,35,.7);
+  /* door/wall geometry ink (RGB triple, alpha applied in JS via geo()) */
+  --geo-rgb:230,237,243;
+  /* 3D scene floor/grid/axes */
+  --scene-ground:rgba(60,80,110,.14); --scene-grid-minor:#1c2530;
+  --scene-grid-major:#33465c; --scene-axis:#5a6b7b; --scene-label:rgba(180,200,225,.55);
 }
 :root[data-theme="light"]{
   --bg:#f5f7fa; --panel:#ffffff; --panel2:#eef2f7; --line:#d4dbe4;
@@ -32,6 +37,9 @@
   --axis:#7a8798; --ground:#5c6b7c; --handle-fill:#ffffff;
   --on-accent:#ffffff;
   --overlay-strong:rgba(255,255,255,.9); --overlay-soft:rgba(255,255,255,.75);
+  --geo-rgb:44,54,68;
+  --scene-ground:rgba(120,140,170,.12); --scene-grid-minor:#c4ccd6;
+  --scene-grid-major:#98a6b6; --scene-axis:#6b7a8b; --scene-label:rgba(70,85,105,.8);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -1006,6 +1014,8 @@ function polyPath(poly){
   ctx.closePath();
 }
 function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+// Door/wall geometry ink at a given alpha, theme-aware (dark→near-white, light→slate).
+function geo(a){return "rgba("+cssVar("--geo-rgb")+","+a+")";}
 
 /* ---- light / dark theme ---- */
 function applyTheme(mode){
@@ -1114,7 +1124,7 @@ function drawGrid(){
   ctx.beginPath(); ctx.arc(originS.x,originS.y,3,0,7); ctx.fill();
   if(top){
     ctx.font="bold 12px sans-serif"; ctx.textAlign="center";
-    ctx.fillStyle="rgba(77,163,255,.7)";
+    ctx.fillStyle=cssVar("--accent");
     ctx.fillText("FRONT ▸", ah.x, ah.y+14);
     ctx.fillText("◂ REAR", ah0.x, ah0.y+14);
   }
@@ -1236,7 +1246,7 @@ function drawObstacles(){
     // highlight ring when this obstacle is selected in Move mode
     const isMoveSelected=$("moveObs")?.checked && $("moveObsSel")?.value===o.id;
     if(isMoveSelected){
-      ctx.strokeStyle="#fff"; ctx.lineWidth=2.5;
+      ctx.strokeStyle=cssVar("--ink"); ctx.lineWidth=2.5;
       const pad=6;
       if(shape==="circle"||shape==="human"){
         ctx.beginPath(); ctx.ellipse(ctr.x,ctr.y,hw+pad,hh+pad,0,0,Math.PI*2); ctx.stroke();
@@ -1349,7 +1359,7 @@ function drawScene(){
   if($("showGhost").checked){
     for(const pct of project.door.positionsPct){
       const od=doorAngleForPercent(pct,project.door,side);
-      drawDoor(od,side,{stroke:"rgba(230,237,243,.18)",lw:1});
+      drawDoor(od,side,{stroke:geo(.18),lw:1});
       project.sensors.forEach(s=>{ if(s.active){
         const c=sensorColor(s);
         drawSensorFov(s,od,side,c+"0d",c+"2e",1); } });
@@ -1360,7 +1370,7 @@ function drawScene(){
     const hull=measuredFovHull();
     if(hull) fillPoly(hull,"rgba(57,211,83,.10)","rgba(57,211,83,.7)",1.5);
   }
-  drawDoor(openDeg,side,{fill:"rgba(230,237,243,.12)",stroke:"#e6edf3",lw:2});
+  drawDoor(openDeg,side,{fill:geo(.12),stroke:geo(.95),lw:2});
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
   drawRegions();
@@ -1453,11 +1463,11 @@ function doorPrismFaces(openDeg,side){
   const L=project.door.lengthMm||1000, x0=project.door.hingeX-L/2, x1=project.door.hingeX+L/2;
   const faces=[];
   const end0=prof.map(p=>({x:x0,y:p.x,z:p.y})), end1=prof.map(p=>({x:x1,y:p.x,z:p.y}));
-  faces.push({pts:end0, fill:"rgba(230,237,243,.10)", stroke:"rgba(230,237,243,.55)", lw:1});
-  faces.push({pts:end1, fill:"rgba(230,237,243,.10)", stroke:"rgba(230,237,243,.55)", lw:1});
+  faces.push({pts:end0, fill:geo(.10), stroke:geo(.55), lw:1});
+  faces.push({pts:end1, fill:geo(.10), stroke:geo(.55), lw:1});
   for(let i=0;i<prof.length;i++){ const j=(i+1)%prof.length;
     faces.push({pts:[end0[i],end0[j],end1[j],end1[i]],
-      fill:"rgba(230,237,243,.07)", stroke:"rgba(230,237,243,.30)", lw:1}); }
+      fill:geo(.07), stroke:geo(.30), lw:1}); }
   return faces;
 }
 // 3D FOV as an elliptical CONE with a curved (spherical) cap: hFOV half-angle
@@ -1552,31 +1562,31 @@ function draw3DScene(){
   const fc=[{x:-g,y:-g,z:0},{x:g,y:-g,z:0},{x:g,y:g,z:0},{x:-g,y:g,z:0}];
   ctx.beginPath();
   fc.forEach((p,i)=>{ const q=project3D(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
-  ctx.closePath(); ctx.fillStyle="rgba(60,80,110,.14)"; ctx.fill();
+  ctx.closePath(); ctx.fillStyle=cssVar("--scene-ground"); ctx.fill();
   // grid lines: minor at gridCellMm, major every 5 cells (guard against too many)
   const cell=gridCellMm, major=cell*5;
   const nDiv=2*g/cell;
   if(nDiv<=160){
-    for(let x=-g;x<=g+1;x+=cell){ if(Math.round(x)%major!==0) line3({x,y:-g,z:0},{x,y:g,z:0},"#1c2530",1); }
-    for(let y=-g;y<=g+1;y+=cell){ if(Math.round(y)%major!==0) line3({x:-g,y,z:0},{x:g,y,z:0},"#1c2530",1); }
+    for(let x=-g;x<=g+1;x+=cell){ if(Math.round(x)%major!==0) line3({x,y:-g,z:0},{x,y:g,z:0},cssVar("--scene-grid-minor"),1); }
+    for(let y=-g;y<=g+1;y+=cell){ if(Math.round(y)%major!==0) line3({x:-g,y,z:0},{x:g,y,z:0},cssVar("--scene-grid-minor"),1); }
   }
-  for(let x=-g;x<=g+1;x+=major){ line3({x,y:-g,z:0},{x,y:g,z:0},"#33465c",1); }
-  for(let y=-g;y<=g+1;y+=major){ line3({x:-g,y,z:0},{x:g,y,z:0},"#33465c",1); }
+  for(let x=-g;x<=g+1;x+=major){ line3({x,y:-g,z:0},{x,y:g,z:0},cssVar("--scene-grid-major"),1); }
+  for(let y=-g;y<=g+1;y+=major){ line3({x:-g,y,z:0},{x:g,y,z:0},cssVar("--scene-grid-major"),1); }
   // floor distance labels along the X and Y axes (every major line)
   const cmFmt3=v=>Math.abs(v)>=1000?(v/1000).toFixed(v%1000===0?0:1)+"m":Math.round(v/10)+"cm";
-  ctx.fillStyle="rgba(180,200,225,.55)"; ctx.font="10px sans-serif"; ctx.textAlign="center";
+  ctx.fillStyle=cssVar("--scene-label"); ctx.font="10px sans-serif"; ctx.textAlign="center";
   for(let x=-g;x<=g+1;x+=major){ if(x===0) continue; const q=project3D({x,y:0,z:0}); ctx.fillText(cmFmt3(x),q.x,q.y); }
   for(let y=-g;y<=g+1;y+=major){ if(y===0) continue; const q=project3D({x:0,y,z:0}); ctx.fillText(cmFmt3(y),q.x,q.y); }
   ctx.textAlign="left";
   // axes
-  line3({x:0,y:0,z:0},{x:1500,y:0,z:0},"#5a6b7b",2); // X
-  line3({x:0,y:0,z:0},{x:0,y:1500,z:0},"#5a6b7b",2); // Y
-  line3({x:0,y:0,z:0},{x:0,y:0,z:1800},"#5a6b7b",2); // Z
+  line3({x:0,y:0,z:0},{x:1500,y:0,z:0},cssVar("--scene-axis"),2); // X
+  line3({x:0,y:0,z:0},{x:0,y:1500,z:0},cssVar("--scene-axis"),2); // Y
+  line3({x:0,y:0,z:0},{x:0,y:0,z:1800},cssVar("--scene-axis"),2); // Z
   const lx=project3D({x:1650,y:0,z:0}), ly=project3D({x:0,y:1650,z:0}), lz=project3D({x:0,y:0,z:1950});
   ctx.fillStyle=cssVar("--muted"); ctx.font="11px sans-serif";
   ctx.fillText("X",lx.x,lx.y); ctx.fillText("Y",ly.x,ly.y); ctx.fillText("Z up",lz.x,lz.y);
   const lxf=project3D({x:2200,y:0,z:0}), lxr=project3D({x:-2200,y:0,z:0});
-  ctx.font="bold 12px sans-serif"; ctx.fillStyle="rgba(77,163,255,.7)"; ctx.textAlign="center";
+  ctx.font="bold 12px sans-serif"; ctx.fillStyle=cssVar("--accent"); ctx.textAlign="center";
   ctx.fillText("FRONT",lxf.x,lxf.y-8); ctx.fillText("REAR",lxr.x,lxr.y-8);
   ctx.textAlign="left";
   // collect depth-sorted faces: door prism + swept ghosts + FOV frustums + obstacles
@@ -1585,7 +1595,7 @@ function draw3DScene(){
     for(const pct of d.positionsPct){ const od=doorAngleForPercent(pct,d,side);
       doorPolygonAtAngle(d,od,side); // (kept for parity)
       const pr=doorPrismFaces(od,side);
-      pr.forEach(fc=>faces.push({...fc, fill:null, stroke:"rgba(230,237,243,.08)", lw:1})); }
+      pr.forEach(fc=>faces.push({...fc, fill:null, stroke:geo(.14), lw:1})); }
   }
   faces=faces.concat(doorPrismFaces(openDeg,side));
   const apexes=[];
@@ -1647,7 +1657,7 @@ function draw3DScene(){
   faces.forEach(fc=>face3(fc.pts, fc.fill, fc.stroke, fc.lw));
   // hinge (roof line along X)
   line3({x:d.hingeX-(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},
-        {x:d.hingeX+(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},"#ffffff",2);
+        {x:d.hingeX+(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},geo(.95),2);
   // sensors (foreground) + labels
   apexes.forEach(({s,apex})=>{ const q=dot3(apex,4,sensorColor(s));
     ctx.fillStyle=cssVar("--ink"); ctx.font="11px sans-serif"; ctx.fillText(s.id,q.x+6,q.y-6); });
