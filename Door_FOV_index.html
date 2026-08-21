@@ -1145,10 +1145,20 @@ function drawHinge(){
 }
 // Draw a single sensor's FOV at a given opening angle (plane-aware).
 function sensorColor(s){ return s.color||"#4da3ff"; }
-function drawSensorFov(s,openDeg,side,fill,stroke,lw){
+function drawSensorFov(s,openDeg,side,fill,stroke,lw,showSurfaceGuide=true){
   if(s.showFov===false) return;
-  const poly = sensorFovProject(s,project.door,openDeg,side,curPlane==="top"?"top":"front");
+  const plane=curPlane==="top"?"top":"front";
+  const poly = sensorFovProject(s,project.door,openDeg,side,plane);
   fillPoly(poly,fill,stroke,lw);
+  // Project the matching horizontal/vertical spherical-cap section from the
+  // 3D geometry. This makes the rounded range boundary explicit in both 2D views.
+  if(showSurfaceGuide){
+    const g=sensorConeGeom(s,project.door,openDeg,side,72);
+    const line=g.crossLines[plane==="top"?0:1];
+    ctx.beginPath(); line.forEach((q,i)=>{ const p=worldToScreen(plane==="top"?{x:q.x,y:q.y}:{x:q.y,y:q.z});
+      i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); });
+    ctx.strokeStyle=sensorColor(s)+"cc"; ctx.lineWidth=Math.max(1,lw||1); ctx.stroke();
+  }
 }
 function drawSensor(s,openDeg,side){
   if(!s.active) return;
@@ -1346,7 +1356,7 @@ function drawScene(){
       drawDoor(od,side,{stroke:geo(.18),lw:1});
       project.sensors.forEach(s=>{ if(s.active){
         const c=sensorColor(s);
-        drawSensorFov(s,od,side,c+"0d",c+"2e",1); } });
+        drawSensorFov(s,od,side,c+"0d",c+"2e",1,false); } });
     }
   }
   // Measured FOV boundary from PASS points (§9.2), front plane only.
@@ -1544,8 +1554,9 @@ function sensorConeGeom(s, door, openDeg, side, N){
     out.push(point(R,rho*Math.cos(t),rho*Math.sin(t))); } return out; };
   const maxR=Math.max(1,s.maxRangeMm||1), minR=Math.max(0,Math.min(s.minRangeMm||0,maxR));
   const outerRings=[]; for(let j=0;j<=5;j++) outerRings.push(ring(maxR,j/5));
-  const cross=(horizontal)=>{ const out=[]; for(let i=-18;i<=18;i++){
-    const q=i/18; out.push(point(maxR,horizontal?q:0,horizontal?0:q)); } return out; };
+  const crossSteps=Math.max(36,N);
+  const cross=(horizontal)=>{ const out=[]; for(let i=0;i<=crossSteps;i++){
+    const q=-1+2*i/crossSteps; out.push(point(maxR,horizontal?q:0,horizontal?0:q)); } return out; };
   return { apex, axis:ax, far:outerRings[5], near:minR>1 ? ring(minR) : null,
     outerRings, crossLines:[cross(true),cross(false)],
     axisEnd:point(maxR,0,0), N };
@@ -1554,9 +1565,14 @@ function sensorConeGeom(s, door, openDeg, side, N){
 // projected into a view plane ("top" -> X-Y, else front -> Y-Z). This is the
 // same shape used for drawing and for detection, so all views agree.
 function sensorFovProject(s, door, openDeg, side, plane){
-  const g=sensorConeGeom(s, door, openDeg, side, 28);
+  // High-density sampling projects the exact spherical-sector geometry used by
+  // the 3D view. Include the near ring (rather than the apex) for sensors with
+  // a minimum range so the 2D silhouette also represents the blind zone.
+  const g=sensorConeGeom(s, door, openDeg, side, 96);
   const pr = plane==="top" ? q=>({x:q.x,y:q.y}) : q=>({x:q.y,y:q.z});
-  const pts=[pr(g.apex)]; for(const q of g.far) pts.push(pr(q));
+  const pts=[];
+  if(g.near) for(const q of g.near) pts.push(pr(q)); else pts.push(pr(g.apex));
+  for(const q of g.far) pts.push(pr(q));
   return convexHull(pts);
 }
 function sensorConeFaces(s,openDeg,side){
@@ -3279,6 +3295,10 @@ function runSelfTests(){
     radii.every(r=>Math.abs(r-dp.sensors[0].maxRangeMm)<1e-6)]);
   results.push(["3D FOV outer surface has horizontal + vertical cross lines",
     cg.crossLines.length===2 && cg.crossLines.every(line=>line.length===37)]);
+  const smoothFront=sensorFovProject(dp.sensors[0],dp.door,0,"LH","front");
+  const smoothTop=sensorFovProject(dp.sensors[0],dp.door,0,"LH","top");
+  results.push(["front + top FOV use smooth 3D spherical projection",
+    smoothFront.length>30 && smoothTop.length>30]);
   const clipped=clipPolyAboveGround([{x:0,y:0,z:-2},{x:2,y:0,z:2},{x:0,y:2,z:2}]);
   results.push(["3D FOV ground clipping inserts z=0 intersections",
     clipped.length===4 && clipped.every(q=>q.z>=0) && clipped.filter(q=>q.z===0).length===2]);
