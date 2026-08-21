@@ -18,7 +18,8 @@
   --green:#39d353; --yellow:#e3b341; --red:#f85149; --orange:#ff9800;
   --gray:#6e7681; --blue:#4da3ff; --purple:#a371f7;
   /* canvas / scene colours (read from JS via cssVar) */
-  --canvas-bg:#0a0d11; --grid-minor:#161b22; --grid-major:#2b3644;
+  --canvas-bg:#0a0d11; --canvas-bg-top:#0a0d11; --canvas-bg-bot:#0a0d11;
+  --grid-minor:#161b22; --grid-major:#2b3644;
   --axis:#30363d; --ground:#3a4757; --handle-fill:#0a0d11;
   --on-accent:#04121f;
   --overlay-strong:rgba(23,28,35,.9); --overlay-soft:rgba(23,28,35,.7);
@@ -33,7 +34,8 @@
   --ink:#1b232c; --muted:#5a6673; --accent:#1f6feb;
   --green:#1a7f37; --yellow:#9a6700; --red:#cf222e; --orange:#bc4c00;
   --gray:#8b949e; --blue:#1f6feb; --purple:#8250df;
-  --canvas-bg:#ffffff; --grid-minor:#d5dce4; --grid-major:#a8b4c2;
+  --canvas-bg:#eef4fa; --canvas-bg-top:#c4d7ee; --canvas-bg-bot:#f4f8fc;
+  --grid-minor:#d5dce4; --grid-major:#a8b4c2;
   --axis:#7a8798; --ground:#5c6b7c; --handle-fill:#ffffff;
   --on-accent:#ffffff;
   --overlay-strong:rgba(255,255,255,.9); --overlay-soft:rgba(255,255,255,.75);
@@ -103,7 +105,8 @@ button.primary{background:var(--accent);color:var(--on-accent);border-color:var(
 .toolbar label{color:var(--muted);font-size:11px}
 #doorPct{width:150px}
 
-.canvas-wrap{position:relative;flex:1;min-height:0;background:var(--canvas-bg);display:flex}
+.canvas-wrap{position:relative;flex:1;min-height:0;
+  background:linear-gradient(180deg,var(--canvas-bg-top),var(--canvas-bg-bot));display:flex}
 .canvas-pane{position:relative;flex:1;min-width:0;min-height:0}
 #pane2{border-left:1px solid var(--line)}
 canvas{display:block;width:100%;height:100%}
@@ -1016,6 +1019,16 @@ function polyPath(poly){
 function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 // Door/wall geometry ink at a given alpha, theme-aware (dark→near-white, light→slate).
 function geo(a){return "rgba("+cssVar("--geo-rgb")+","+a+")";}
+// Paint a canvas background: vertical gradient (top→bottom) when the theme
+// defines distinct stops (light mode's CAD-style blue→white), else a flat fill.
+function paintBg(c,w,h){
+  const top=cssVar("--canvas-bg-top"), bot=cssVar("--canvas-bg-bot");
+  if(top && bot && top!==bot){
+    const g=c.createLinearGradient(0,0,0,h);
+    g.addColorStop(0,top); g.addColorStop(1,bot); c.fillStyle=g;
+  } else { c.fillStyle=cssVar("--canvas-bg"); }
+  c.fillRect(0,0,w,h);
+}
 
 /* ---- light / dark theme ---- */
 function applyTheme(mode){
@@ -1041,7 +1054,7 @@ function toggleTheme(){
 })();
 
 function drawGrid(){
-  ctx.fillStyle=cssVar("--canvas-bg"); ctx.fillRect(0,0,W,H);
+  paintBg(ctx,W,H);
   drawHeatmap(); // coloured distance zones (click Heatmap to compute)
   const cell=gridCellMm, major=cell*5;
   const s=curView.zoom;
@@ -1553,7 +1566,7 @@ function sweptFov3dFaces(door, side){
 }
 function draw3DScene(){
   cur3B=cam3Basis();
-  ctx.fillStyle=cssVar("--canvas-bg"); ctx.fillRect(0,0,W,H);
+  paintBg(ctx,W,H);
   const d=project.door, side=project.project.doorSide;
   const openDeg=doorAngleForPercent(project.view.doorPct,d,side);
   // ground floor + grid at z=0 (matches the 2D top-view grid resolution)
@@ -2775,7 +2788,7 @@ function exportPng(){
     const tmp=document.createElement("canvas");
     tmp.width=c1.width+c2.width+gap; tmp.height=Math.max(c1.height,c2.height);
     const t=tmp.getContext("2d");
-    t.fillStyle=cssVar("--canvas-bg"); t.fillRect(0,0,tmp.width,tmp.height);
+    paintBg(t,tmp.width,tmp.height);
     t.drawImage(c1,0,0); t.drawImage(c2,c1.width+gap,0);
     tmp.toBlob(save);
     return;
