@@ -1,16 +1,76 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wing Door Sensor FOV Tool</title>
-<!-- The application now lives in Door_FOV_index.html. This lightweight
-     redirect keeps "/" working when the repo is served from its root. -->
-<meta http-equiv="refresh" content="0; url=Door_FOV_index.html">
-<link rel="canonical" href="Door_FOV_index.html">
-<script>location.replace("Door_FOV_index.html");</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mmWave Radar — Conceptual Radiation Pattern</title>
+<style>
+  :root{--ink:#17243a;--muted:#68778d;--blue:#1268b3;--line:#c9d5df;--panel:#f7f9fb}
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:#fff}
+  main{height:100%;display:grid;grid-template-rows:auto 1fr auto;min-height:620px}
+  header{display:flex;align-items:center;gap:18px;padding:19px 28px 16px;border-bottom:1px solid #dfe6ec;background:rgba(255,255,255,.96)}
+  .mark{width:38px;height:38px;border:1px solid #9aabba;border-radius:6px;display:grid;place-items:center;background:linear-gradient(135deg,#f8fafc,#e9eff4)}
+  .mark:before{content:"";width:18px;height:12px;border:2px solid #1e6ca8;border-left-width:5px;border-radius:2px}
+  h1{font-size:18px;line-height:1.2;margin:0;letter-spacing:.02em;text-transform:uppercase} .subtitle{font-size:11px;color:var(--muted);margin-top:4px;letter-spacing:.12em;text-transform:uppercase}
+  .specs{margin-left:auto;display:flex;gap:28px}.spec{text-align:right}.spec b{font-size:17px}.spec span{display:block;color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .stage{position:relative;overflow:hidden;background:radial-gradient(circle at 55% 48%,#fff 0,#fff 53%,#f6f9fb 100%)}
+  canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:grab}canvas:active{cursor:grabbing}
+  .tag{position:absolute;left:27px;top:23px;padding:8px 11px;border-left:3px solid #1a6da8;background:rgba(247,250,252,.9);font:600 10px/1.35 ui-monospace,SFMono-Regular,monospace;letter-spacing:.06em;color:#40536a}
+  .key{position:absolute;right:28px;top:25px;width:205px;padding:13px 15px;border:1px solid #d8e1e8;background:rgba(255,255,255,.9);box-shadow:0 5px 18px rgba(40,63,83,.06);font-size:10px;color:#53657a}
+  .key strong{display:block;color:var(--ink);letter-spacing:.08em;margin-bottom:10px}.gradient{height:7px;border-radius:5px;background:linear-gradient(90deg,#ef2b25 0,#ffd326 28%,#38b95a 58%,#147ad1 100%);margin-bottom:6px}.scale{display:flex;justify-content:space-between;font:9px ui-monospace,monospace}
+  .controls{position:absolute;right:28px;bottom:22px;display:flex;gap:7px}.controls button{border:1px solid #ccd7e0;background:#fff;color:#3c5065;border-radius:4px;padding:7px 10px;font:600 10px system-ui;cursor:pointer}.controls button:hover{border-color:#2473ad;color:#1268b3}
+  footer{display:flex;align-items:center;gap:13px;padding:12px 28px;border-top:1px solid #dfe6ec;background:var(--panel);font-size:10px;letter-spacing:.055em;color:#56677b;text-transform:uppercase}.warn{width:16px;height:16px;border:1px solid #d39b14;color:#a87100;display:grid;place-items:center;border-radius:50%;font-weight:800}.foot-right{margin-left:auto;color:#8593a2}
+  @media(max-width:760px){.specs{display:none}.key{right:12px;top:12px}.tag{left:12px;top:12px}.controls{right:12px}.key{width:175px}header{padding:14px 18px}footer{padding:10px 18px}}
+</style>
 </head>
 <body>
-<p>Redirecting to <a href="Door_FOV_index.html">Door_FOV_index.html</a>…</p>
+<main>
+  <header>
+    <div class="mark" aria-hidden="true"></div><div><h1>Automotive mmWave Radar</h1><div class="subtitle">Normalized antenna radiation pattern · engineering concept</div></div>
+    <div class="specs"><div class="spec"><b>120°</b><span>Horizontal FOV</span></div><div class="spec"><b>60°</b><span>Vertical FOV</span></div><div class="spec"><b>+X</b><span>Boresight</span></div></div>
+  </header>
+  <section class="stage" id="stage">
+    <canvas id="scene" aria-label="Interactive 3D conceptual mmWave radar radiation pattern"></canvas>
+    <div class="tag">COORDINATE SYSTEM<br>X — FORWARD / BORESIGHT<br>Y — LATERAL &nbsp; Z — VERTICAL</div>
+    <aside class="key"><strong>RELATIVE SIGNAL LEVEL</strong><div class="gradient"></div><div class="scale"><span>0 dB</span><span>−3 dB</span><span>−6 dB</span></div><p>Color indicates conceptual normalized sensitivity, not absolute range.</p></aside>
+    <div class="controls"><button id="lobes">SIDE LOBES: ON</button><button id="reset">RESET VIEW</button></div>
+  </section>
+  <footer><span class="warn">!</span><strong>Conceptual normalized antenna radiation pattern</strong><span>— not an exact detection boundary</span><span class="foot-right">Drag to orbit · wheel to zoom</span></footer>
+</main>
+<script>
+const canvas=document.querySelector('#scene'), stage=document.querySelector('#stage'), ctx=canvas.getContext('2d');
+let W=0,H=0,dpr=1,az=-.67,el=.38,zoom=1,drag=null,showLobes=true;
+const C={ink:'#17243a',grid:'#cbd6df',plane:'rgba(119,153,180,.075)',planeEdge:'rgba(91,125,151,.42)',blue:'#167bd3'};
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=stage.clientWidth;H=stage.clientHeight;canvas.width=W*dpr;canvas.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
+function P(p){const ca=Math.cos(az),sa=Math.sin(az),ce=Math.cos(el),se=Math.sin(el);let x=p[0]*ca-p[1]*sa,y=p[0]*sa+p[1]*ca;let z=p[2];const yy=y*ce-z*se,zz=y*se+z*ce;const s=Math.min(W/1050,H/650)*zoom;return{x:W*.43+x*s,y:H*.57-yy*s,d:zz}}
+function path(points,close=false){ctx.beginPath();points.forEach((p,i)=>{p=P(p);i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)});if(close)ctx.closePath()}
+function line(a,b,color=C.ink,w=1,dash=[]){path([a,b]);ctx.strokeStyle=color;ctx.lineWidth=w;ctx.setLineDash(dash);ctx.stroke();ctx.setLineDash([])}
+function label(t,p,dx=0,dy=0,color=C.ink,font='600 11px ui-monospace,monospace'){p=P(p);ctx.font=font;ctx.fillStyle=color;ctx.fillText(t,p.x+dx,p.y+dy)}
+function arrow(a,b,color,w=1.4){line(a,b,color,w);const A=P(a),B=P(b),ang=Math.atan2(B.y-A.y,B.x-A.x);ctx.beginPath();ctx.moveTo(B.x,B.y);ctx.lineTo(B.x-8*Math.cos(ang-.45),B.y-8*Math.sin(ang-.45));ctx.lineTo(B.x-8*Math.cos(ang+.45),B.y-8*Math.sin(ang+.45));ctx.closePath();ctx.fillStyle=color;ctx.fill()}
+function plane(pts,title,pos){path(pts,true);ctx.fillStyle=C.plane;ctx.fill();ctx.strokeStyle=C.planeEdge;ctx.lineWidth=1;ctx.setLineDash([5,5]);ctx.stroke();ctx.setLineDash([]);label(title,pos,5,-7,'#71879a','600 10px ui-monospace,monospace')}
+function fanPoint(x,t,scale=1){const u=x/570;const edge=Math.pow(Math.sin(Math.PI*u/2),.84);const y=scale*505*edge*Math.cos(t),z=scale*190*edge*Math.sin(t);return[x,y,z]}
+function shell(scale,fill,stroke){const nx=22,nt=34,faces=[];for(let i=0;i<nx;i++)for(let j=0;j<nt;j++){const x0=18+i*552/nx,x1=18+(i+1)*552/nx,t0=j*Math.PI*2/nt,t1=(j+1)*Math.PI*2/nt;let q=[fanPoint(x0,t0,scale),fanPoint(x1,t0,scale),fanPoint(x1,t1,scale),fanPoint(x0,t1,scale)];faces.push({q,d:q.reduce((s,p)=>s+P(p).d,0)/4})}faces.sort((a,b)=>a.d-b.d);for(const f of faces){path(f.q,true);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=.35;ctx.stroke()}}
+function arc(axis,r,a0,a1,text,pos){const pts=[];for(let i=0;i<=36;i++){let a=a0+(a1-a0)*i/36;pts.push(axis==='h'?[r*Math.cos(a),r*Math.sin(a),0]:[r*Math.cos(a),0,r*Math.sin(a)])}path(pts);ctx.strokeStyle='#315d7c';ctx.lineWidth=1.25;ctx.stroke();label(text,pos,5,-7,'#214e70','700 11px ui-monospace,monospace')}
+function sideLobe(y,z,sy,sz,color){const pts=[];for(let i=0;i<=20;i++){let x=i*145/20,r=Math.sin(Math.PI*i/20);pts.push([55+x,y+sy*r,z+sz*r])}for(let i=20;i>=0;i--){let x=i*145/20,r=Math.sin(Math.PI*i/20);pts.push([55+x,y-sy*r,z-sz*r])}path(pts,true);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='rgba(31,109,168,.45)';ctx.stroke()}
+function draw(){ctx.clearRect(0,0,W,H);
+  plane([[0,-590,0],[610,-590,0],[610,590,0],[0,590,0]],'TOP VIEW · X–Y',[525,-575,0]);
+  plane([[0,0,-260],[610,0,-260],[610,0,260],[0,0,260]],'SIDE VIEW · X–Z',[530,0,250]);
+  for(let x=100;x<=600;x+=100){line([x,-590,0],[x,590,0],'rgba(132,153,170,.20)',.7,[2,6]);line([x,0,-260],[x,0,260],'rgba(132,153,170,.20)',.7,[2,6])}
+  if(showLobes){sideLobe(0,35,55,28,'rgba(42,150,203,.20)');sideLobe(0,-48,42,-24,'rgba(43,115,195,.16)');sideLobe(0,0,0,58,'rgba(38,128,203,.13)')}
+  shell(1,'rgba(24,113,205,.045)','rgba(19,104,182,.16)');shell(.78,'rgba(33,184,99,.055)','rgba(29,155,95,.12)');shell(.46,'rgba(255,211,33,.07)','rgba(216,166,13,.11)');shell(.21,'rgba(238,49,34,.14)','rgba(205,47,35,.12)');
+  // boundary ribs and boresight
+  [-Math.PI/2,0,Math.PI/2,Math.PI].forEach(t=>{const p=[];for(let x=16;x<=570;x+=18)p.push(fanPoint(x,t,1));path(p);ctx.strokeStyle='rgba(15,92,157,.58)';ctx.lineWidth=1;ctx.stroke()});
+  arrow([0,0,0],[650,0,0],'#d94732',2);line([0,0,0],[285,494,0],'#315d7c',1,[5,4]);line([0,0,0],[285,-494,0],'#315d7c',1,[5,4]);line([0,0,0],[330,0,190],'#315d7c',1,[5,4]);line([0,0,0],[330,0,-190],'#315d7c',1,[5,4]);
+  arc('h',135,-Math.PI/3,Math.PI/3,'120° H-FOV',[77,126,0]);arc('v',108,-Math.PI/6,Math.PI/6,'60° V-FOV',[93,0,52]);
+  // sensor body at origin
+  const box=[[-25,-35,-25],[15,-35,-25],[15,35,-25],[-25,35,-25],[-25,-35,25],[15,-35,25],[15,35,25],[-25,35,25]],faces=[[0,1,2,3],[4,5,6,7],[1,2,6,5],[0,3,7,4]];faces.forEach(f=>{path(f.map(i=>box[i]),true);ctx.fillStyle='#34485b';ctx.fill();ctx.strokeStyle='#14283a';ctx.stroke()});
+  label('RADAR SENSOR',[-25,-42,42],-15,-4,'#20364a','700 10px ui-monospace,monospace');label('BORESIGHT / 0 dB',[360,0,0],4,-9,'#c83d2d','700 10px ui-monospace,monospace');
+  arrow([0,0,0],[720,0,0],'#d74732',1.7);arrow([0,0,0],[0,620,0],'#3271a3',1.7);arrow([0,0,0],[0,0,300],'#3271a3',1.7);label('X  FORWARD',[720,0,0],8,3,'#c83d2d');label('Y  LATERAL',[0,620,0],6,3,'#235b88');label('Z  UP',[0,0,300],6,3,'#235b88');
+  label('−6 dB boundary',[535,-350,-155],3,0,'#176db2');label('−3 dB region',[455,-215,-75],3,0,'#218852');
+}
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{if(!drag)return;az+=(e.clientX-drag.x)*.006;el=Math.max(-1.15,Math.min(1.15,el+(e.clientY-drag.y)*.006));drag={x:e.clientX,y:e.clientY};draw()});canvas.addEventListener('pointerup',()=>drag=null);canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.65,Math.min(1.7,zoom*Math.exp(-e.deltaY*.001)));draw()},{passive:false});
+document.querySelector('#reset').onclick=()=>{az=-.67;el=.38;zoom=1;draw()};document.querySelector('#lobes').onclick=e=>{showLobes=!showLobes;e.target.textContent='SIDE LOBES: '+(showLobes?'ON':'OFF');draw()};new ResizeObserver(resize).observe(stage);
+</script>
 </body>
 </html>
