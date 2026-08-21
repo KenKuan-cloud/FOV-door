@@ -1475,6 +1475,7 @@ function sensorConeFaces(s,openDeg,side){
   const faces=[];
   const c=sensorColor(s);
   const fill=c+"1a", edge=c+"6b", edgeFar=c+"99";
+  const capFill=c+"73"; // far end cap (outer surface) — solid, like a projected screen
   if(s.showFov===false) return {faces:[], apex};
   if(near){
     for(let i=0;i<N;i++){ const j=(i+1)%N;
@@ -1484,7 +1485,7 @@ function sensorConeFaces(s,openDeg,side){
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[apex,far[i],far[j]], fill, stroke:edge, lw:1}); }
   }
-  faces.push({pts:far, fill, stroke:edgeFar, lw:1.2});
+  faces.push({pts:far, fill:capFill, stroke:edgeFar, lw:1.2});
   return {faces, apex};
 }
 function sweptFov3dFaces(door, side){
