@@ -272,6 +272,9 @@ a.dl{color:var(--accent)}
             <div class="field"><label>Projected Z shift on door (mm)</label>
               <input id="d_img_pz" type="number" value="0" oninput="setDoorImageAdjustment('projectZ',this.value)"></div>
           </div>
+          <div class="field"><label title="Mirror the ZX image along the vehicle X axis">
+            <input id="d_img_flip" type="checkbox" onchange="setDoorImageFlip(this.checked)">
+            Flip picture front ↔ rear</label></div>
           <div class="row">
             <div class="field"><label>Opacity</label>
               <input id="d_img_op" type="range" min="0" max="100" value="100"
@@ -1534,22 +1537,29 @@ function doorImageFaces(door, openDeg, side){
   const sx=cfg.sourceX||0, sz=cfg.sourceZ||0, px=cfg.projectX||0, pz=cfg.projectZ||0;
   const srcCx=door.hingeX+sx, srcCz=door.hingeZ-H/2+sz;
   const srcX0=srcCx-L/2, srcX1=srcCx+L/2, srcZ0=srcCz-H/2, srcZ1=srcCz+H/2;
-  const projCx=srcCx+px, projCz=srcCz+pz;
-  const projX0=projCx-L/2, projZ1=projCz+H/2;
+  const projCx=srcCx+px, projX0=projCx-L/2;
+  // Projection registration is stored in door-local Z. The texture therefore
+  // rotates with the panel instead of being re-projected in world Z every frame.
+  const projZTopLocal=sz+pz;
   const x0=door.hingeX-L/2, x1=door.hingeX+L/2;
   const iw=img.naturalWidth, ih=img.naturalHeight;
   const op=cfg.opacity!=null?cfg.opacity:1;
+  const sourceS=cfg.flipX
+    ? [{x:iw,y:0},{x:0,y:0},{x:0,y:ih},{x:iw,y:ih}]
+    : [{x:0,y:0},{x:iw,y:0},{x:iw,y:ih},{x:0,y:ih}];
   const faces=[{pts:[{x:srcX0,y:door.hingeY,z:srcZ1},{x:srcX1,y:door.hingeY,z:srcZ1},
     {x:srcX1,y:door.hingeY,z:srcZ0},{x:srcX0,y:door.hingeY,z:srcZ0}],
-    tex:{img,op,sourcePlane:true,s:[{x:0,y:0},{x:iw,y:0},{x:iw,y:ih},{x:0,y:ih}]}}];
-  const uv=p=>({x:(p.x-projX0)/L*iw,y:(projZ1-p.z)/H*ih});
+    tex:{img,op,sourcePlane:true,s:sourceS}}];
+  const uv=(x,localZ)=>{ let u=(x-projX0)/L*iw; if(cfg.flipX) u=iw-u;
+    return {x:u,y:(projZTopLocal-localZ)/H*ih}; };
   for(let i=0;i<prof.length;i++){
     if(!isOuterDoorEdge(prof,i,side)) continue;
     const j=(i+1)%prof.length;
     const Pa={x:x0,y:prof[i].x,z:prof[i].y}, Pb={x:x1,y:prof[i].x,z:prof[i].y};
     const Pc={x:x1,y:prof[j].x,z:prof[j].y}, Pd={x:x0,y:prof[j].x,z:prof[j].y};
     faces.push({ pts:[Pa,Pb,Pc,Pd],
-      tex:{img,op,s:[uv(Pa),uv(Pb),uv(Pc),uv(Pd)]} });
+      tex:{img,op,s:[uv(x0,door.profile[i].z),uv(x1,door.profile[i].z),
+        uv(x1,door.profile[j].z),uv(x0,door.profile[j].z)]} });
   }
   return faces;
 }
@@ -2181,7 +2191,8 @@ function uploadDoorImage(inp){
     project.door.image={src:rd.result,
       opacity:old.opacity!=null?old.opacity:1,
       sourceX:old.sourceX||0, sourceZ:old.sourceZ||0,
-      projectX:old.projectX||0, projectZ:old.projectZ||0};
+      projectX:old.projectX||0, projectZ:old.projectZ||0,
+      flipX:!!old.flipX};
     doorImgSrc=null; ensureDoorImg(); updateDoorImageUi(); render();
   };
   rd.readAsDataURL(f);
@@ -2201,6 +2212,11 @@ function setDoorImageAdjustment(key,v){
   project.door.image[key]=Number.isFinite(+v)?+v:0;
   render();
 }
+function setDoorImageFlip(flipped){
+  if(!project.door.image) return;
+  project.door.image.flipX=!!flipped;
+  render();
+}
 function updateDoorImageUi(){
   const has=!!(project.door.image && project.door.image.src);
   const cfg=project.door.image||{}, st=$("d_img_status"), op=$("d_img_op");
@@ -2212,6 +2228,7 @@ function updateDoorImageUi(){
   const vals={d_img_sx:cfg.sourceX||0,d_img_sz:cfg.sourceZ||0,
     d_img_px:cfg.projectX||0,d_img_pz:cfg.projectZ||0};
   for(const id in vals) if($(id)) $(id).value=vals[id];
+  if($("d_img_flip")) $("d_img_flip").checked=!!cfg.flipX;
 }
 function applyProfile(){
   const lines=$("d_profile").value.split(/\n+/).map(l=>l.trim()).filter(Boolean);
