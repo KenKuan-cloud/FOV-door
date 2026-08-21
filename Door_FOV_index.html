@@ -604,29 +604,6 @@ function beamProject(facing, pitchDeg, plane){
     ? { angle:Math.atan2(ay, ax), scale:Math.hypot(ax, ay) }   // X-Y view
     : { angle:Math.atan2(az, ay), scale:Math.hypot(ay, az) };  // Y-Z (front) view
 }
-// Build FOV polygon (fan / cone) for a sensor pose. Returns vehicle-frame points.
-function fovPolygon(pose, hFovDeg, minRange, maxRange, segs=24){
-  // Centre on the beam's true heading in the front (Y-Z) plane and foreshorten
-  // the range by the fraction of the beam that lies in that plane, so pitch is
-  // honoured (incl. the direction flip when |pitch|>90°). pitch 0 → unchanged.
-  const proj=beamProject(pose.facing, pose.pitch, "front");
-  minRange*=proj.scale; maxRange*=proj.scale;
-  const half=deg2rad(hFovDeg/2);
-  const a0=proj.angle-half, a1=proj.angle+half;
-  const outer=[], inner=[];
-  for(let i=0;i<=segs;i++){
-    const a=a0+(a1-a0)*i/segs;
-    outer.push({x:pose.x+Math.cos(a)*maxRange, y:pose.y+Math.sin(a)*maxRange});
-  }
-  if(minRange>1){
-    for(let i=segs;i>=0;i--){
-      const a=a0+(a1-a0)*i/segs;
-      inner.push({x:pose.x+Math.cos(a)*minRange, y:pose.y+Math.sin(a)*minRange});
-    }
-    return outer.concat(inner);
-  }
-  return [{x:pose.x,y:pose.y}].concat(outer);
-}
 // Ray-casting point-in-polygon.
 function pointInPolygon(pt, poly){
   let inside=false;
@@ -644,8 +621,7 @@ function isInAnyFov(pt, doorPct){
   const side=project.project.doorSide;
   for(const s of project.sensors){
     if(!s.active) continue;
-    const pose=sensorPoseAtAngle(s, project.door, doorAngleForPercent(doorPct, project.door, side), side);
-    const poly=fovPolygon(pose, s.hFovDeg, s.minRangeMm, s.maxRangeMm);
+    const poly=sensorFovProject(s, project.door, doorAngleForPercent(doorPct, project.door, side), side, "front");
     if(pointInPolygon(pt, poly)) return s.id;
   }
   return null;
@@ -660,8 +636,7 @@ function isObsInAnyFov(tp, obs, doorPct){
   const side=project.project.doorSide;
   for(const s of project.sensors){
     if(!s.active) continue;
-    const pose=sensorPoseAtAngle(s, project.door, doorAngleForPercent(doorPct, project.door, side), side);
-    const poly=fovPolygon(pose, s.hFovDeg, s.minRangeMm, s.maxRangeMm);
+    const poly=sensorFovProject(s, project.door, doorAngleForPercent(doorPct, project.door, side), side, "front");
     if(polyRectsOverlap(poly, corners, rect)) return s.id;
   }
   return null;
@@ -773,37 +748,11 @@ function doorFootprintTop(door, openDeg, side){
   const L=door.lengthMm||1000, x0=door.hingeX-L/2, x1=door.hingeX+L/2;
   return [{x:x0,y:ymin},{x:x1,y:ymin},{x:x1,y:ymax},{x:x0,y:ymax}];
 }
-// Horizontal foreshortening of a sensor's range in the top (X-Y) view: as the
-// door lifts, the beam central axis (Y-Z direction = pose.facing) tilts away
-// from horizontal, so its projection onto the ground plane shrinks by
-// |cos(elevation)| = |Y-component| of the beam direction. When the beam points
-// straight up/down this is ~0 (no horizontal coverage).
-function topForeshorten(sensor, door, openDeg, side){
-  const pose=sensorPoseAtAngle(sensor, door, openDeg, side);
-  return beamProject(pose.facing, sensor.pitchDeg, "top").scale;
-}
-// Top-view projected beam centre angle for a sensor (in the X-Y plane).
+// Top-view projected beam centre angle for a sensor (in the X-Y plane); used to
+// draw the sensor's direction arrow. The FOV shape itself comes from
+// sensorFovProject (the true 3D-cone silhouette).
 function sensorTopAngle(sensor, pose){
   return beamProject(pose.facing, sensor.pitchDeg, "top").angle;
-}
-// Top-view horizontal FOV fan (X-Y). Apex at sensor (X, current Y), centered on
-// the actual projected beam direction derived from yaw+pitch.
-function sensorFovTop(sensor, door, openDeg, side, segs=20){
-  const pose=sensorPoseAtAngle(sensor, door, openDeg, side); // pose.x = world Y
-  const cx=door.hingeX+sensor.posX, cy=pose.x;
-  const fs=topForeshorten(sensor, door, openDeg, side);
-  const maxR=sensor.maxRangeMm*fs, minR=sensor.minRangeMm*fs;
-  const base=sensorTopAngle(sensor, pose);
-  const half=deg2rad(sensor.hFovDeg/2), a0=base-half, a1=base+half;
-  const outer=[], inner=[];
-  for(let i=0;i<=segs;i++){ const a=a0+(a1-a0)*i/segs;
-    outer.push({x:cx+Math.cos(a)*maxR, y:cy+Math.sin(a)*maxR}); }
-  if(minR>1){
-    for(let i=segs;i>=0;i--){ const a=a0+(a1-a0)*i/segs;
-      inner.push({x:cx+Math.cos(a)*minR, y:cy+Math.sin(a)*minR}); }
-    return outer.concat(inner);
-  }
-  return [{x:cx,y:cy}].concat(outer);
 }
 // Swept door envelope for the current render plane.
 function sweptEnvelopePlane(){
@@ -892,7 +841,7 @@ function analyzeAll(){ return project.obstacles.map(analyzeObstacle); }
 function activeFovPolys(doorPct){
   const side=project.project.doorSide, od=doorAngleForPercent(doorPct,project.door,side);
   return project.sensors.filter(s=>s.active).map(s=>({ id:s.id,
-    poly:fovPolygon(sensorPoseAtAngle(s,project.door,od,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm) }));
+    poly:sensorFovProject(s,project.door,od,side,"front") }));
 }
 function overlapAnalysis(doorPct){
   const fovs=activeFovPolys(doorPct), n=fovs.length;
@@ -1183,9 +1132,7 @@ function drawHinge(){
 function sensorColor(s){ return s.color||"#4da3ff"; }
 function drawSensorFov(s,openDeg,side,fill,stroke,lw){
   if(s.showFov===false) return;
-  const poly = curPlane==="top"
-    ? sensorFovTop(s,project.door,openDeg,side)
-    : fovPolygon(sensorPoseAtAngle(s,project.door,openDeg,side),s.hFovDeg,s.minRangeMm,s.maxRangeMm);
+  const poly = sensorFovProject(s,project.door,openDeg,side,curPlane==="top"?"top":"front");
   fillPoly(poly,fill,stroke,lw);
 }
 function drawSensor(s,openDeg,side){
@@ -1492,13 +1439,15 @@ function doorPrismFaces(openDeg,side){
       fill:geo(.07), stroke:geo(.30), lw:1}); }
   return faces;
 }
-// 3D FOV as an elliptical CONE with a curved (spherical) cap: hFOV half-angle
+// Elliptical FOV cone geometry in 3D world coords (X,Y,Z): hFOV half-angle
 // spreads fore-aft (X), vFOV half-angle in the Y-Z plane. Ring points sit on a
 // sphere of radius = range, so the far/near surfaces are curved (like Tangram).
-function sensorConeFaces(s,openDeg,side){
-  const pose=sensorPoseAtAngle(s,project.door,openDeg,side); // pose.x=Y, pose.y=Z, facing
-  const apex={x:project.door.hingeX+s.posX, y:pose.x, z:pose.y};
-  const f=pose.facing, N=28;
+// Single source of truth for the 3D render and every 2D projection/detection.
+function sensorConeGeom(s, door, openDeg, side, N){
+  N=N||28;
+  const pose=sensorPoseAtAngle(s, door, openDeg, side); // pose.x=Y, pose.y=Z, facing
+  const apex={x:door.hingeX+s.posX, y:pose.x, z:pose.y};
+  const f=pose.facing;
   // Pitch rotates beam axis toward +X (positive = forward); keeps vx in Y-Z plane
   const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
   const ax=[sp,            Math.cos(f)*cp, Math.sin(f)*cp];  // beam axis (yaw + pitch)
@@ -1510,12 +1459,24 @@ function sensorConeFaces(s,openDeg,side){
                        ax[1]+th*Math.cos(t)*hx[1]+tv*Math.sin(t)*vx[1],
                        ax[2]+th*Math.cos(t)*hx[2]+tv*Math.sin(t)*vx[2] ]);
     out.push({x:apex.x+R*dir[0], y:apex.y+R*dir[1], z:apex.z+R*dir[2]}); } return out; };
-  const far=ring(s.maxRangeMm), faces=[];
+  return { apex, far:ring(s.maxRangeMm), near: s.minRangeMm>1 ? ring(s.minRangeMm) : null, N };
+}
+// True 2D silhouette of the FOV cone: convex hull of the apex + far cap
+// projected into a view plane ("top" -> X-Y, else front -> Y-Z). This is the
+// same shape used for drawing and for detection, so all views agree.
+function sensorFovProject(s, door, openDeg, side, plane){
+  const g=sensorConeGeom(s, door, openDeg, side, 28);
+  const pr = plane==="top" ? q=>({x:q.x,y:q.y}) : q=>({x:q.y,y:q.z});
+  const pts=[pr(g.apex)]; for(const q of g.far) pts.push(pr(q));
+  return convexHull(pts);
+}
+function sensorConeFaces(s,openDeg,side){
+  const {apex, far, near, N}=sensorConeGeom(s, project.door, openDeg, side, 28);
+  const faces=[];
   const c=sensorColor(s);
   const fill=c+"1a", edge=c+"6b", edgeFar=c+"99";
   if(s.showFov===false) return {faces:[], apex};
-  if(s.minRangeMm>1){
-    const near=ring(s.minRangeMm);
+  if(near){
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[near[i],near[j],far[j],far[i]], fill, stroke:edge, lw:1}); }
     faces.push({pts:near, fill, stroke:edgeFar, lw:1});
@@ -2366,16 +2327,11 @@ function _computeHeatPlane(plane){
   for(const s of project.sensors){
     if(!s.active) continue;
     const pose=sensorPoseAtAngle(s,project.door,openDeg,side);
-    let poly,sp,sc=1;
-    if(plane==="top"){
-      sc=topForeshorten(s,project.door,openDeg,side)||1;
-      poly=sensorFovTop(s,project.door,openDeg,side,48);
-      sp={x:project.door.hingeX+s.posX, y:pose.x};
-    } else {
-      poly=fovPolygon(pose,s.hFovDeg,s.minRangeMm,s.maxRangeMm,48);
-      sp={x:pose.x, y:pose.y};
-    }
-    infos.push({poly,sp,stopMm:s.stopMm*sc,warnMm:s.warningMm*sc,maxR:s.maxRangeMm*sc});
+    const poly=sensorFovProject(s,project.door,openDeg,side,plane);
+    const sp = plane==="top"
+      ? {x:project.door.hingeX+s.posX, y:pose.x}
+      : {x:pose.x, y:pose.y};
+    infos.push({poly,sp,stopMm:s.stopMm,warnMm:s.warningMm,maxR:s.maxRangeMm});
   }
   if(!infos.length) return [];
   let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
@@ -3092,7 +3048,7 @@ function runSelfTests(){
   results.push(["2/4 wing lift 90° (Y-Z)", approx(pose.x,-1000)&&approx(pose.y,1500)]);
   // Case 5: point on FOV centerline mid-range is IN.
   const s=demoSensor(); const p0=sensorPoseAtAngle(s,d,0,"LH");
-  const poly=fovPolygon(p0,s.hFovDeg,s.minRangeMm,s.maxRangeMm);
+  const poly=sensorFovProject(s,d,0,"LH","front");
   const mid={x:p0.x+Math.cos(p0.facing)*800,y:p0.y+Math.sin(p0.facing)*800};
   results.push(["5 centerline point IN FOV", pointInPolygon(mid,poly)===true]);
   // Case 6: point beyond max range is OUT.
