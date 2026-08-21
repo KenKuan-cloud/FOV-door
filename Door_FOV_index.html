@@ -26,7 +26,7 @@
   /* door/wall geometry ink (RGB triple, alpha applied in JS via geo()) */
   --geo-rgb:230,237,243;
   /* 3D scene floor/grid/axes */
-  --scene-ground:rgba(60,80,110,.14); --scene-ground-solid:#172231; --scene-grid-minor:#1c2530;
+  --scene-ground:rgba(60,80,110,.14); --scene-grid-minor:#1c2530;
   --scene-grid-major:#33465c; --scene-axis:#5a6b7b; --scene-label:rgba(180,200,225,.55);
 }
 :root[data-theme="light"]{
@@ -40,7 +40,7 @@
   --on-accent:#ffffff;
   --overlay-strong:rgba(255,255,255,.9); --overlay-soft:rgba(255,255,255,.75);
   --geo-rgb:44,54,68;
-  --scene-ground:rgba(120,140,170,.12); --scene-ground-solid:#e3e9f1; --scene-grid-minor:#c4ccd6;
+  --scene-ground:rgba(120,140,170,.12); --scene-grid-minor:#c4ccd6;
   --scene-grid-major:#98a6b6; --scene-axis:#6b7a8b; --scene-label:rgba(70,85,105,.8);
 }
 *{box-sizing:border-box}
@@ -426,8 +426,7 @@ a.dl{color:var(--accent)}
           <label><input type="checkbox" id="showSwept"> Swept envelope</label>
           <label><input type="checkbox" id="showGhost"> Swept FOV</label>
           <label><input type="checkbox" id="showSweptFov3d" onchange="render()"> 3D swept FOV</label>
-          <label title="Hide portions of 3D sensor beams below ground level"><input type="checkbox" id="clipFovGround3d" onchange="render()"> Clip FOV at Z=0</label>
-          <label title="Make the 3D ground plane opaque so it occludes geometry below it"><input type="checkbox" id="solidFloor3d" onchange="render()"> Solid 3D floor</label>
+          <label title="Hide portions of 3D sensor beams below ground level"><input type="checkbox" id="clipFovGround3d" onchange="render()" checked> Clip FOV at Z=0</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
           <label><input type="checkbox" id="showTpIds"> Point IDs</label>
         </div>
@@ -1673,9 +1672,7 @@ function draw3DScene(){
   const fc=[{x:-g,y:-g,z:0},{x:g,y:-g,z:0},{x:g,y:g,z:0},{x:-g,y:g,z:0}];
   ctx.beginPath();
   fc.forEach((p,i)=>{ const q=project3D(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
-  ctx.closePath();
-  const solidFloor=$("solidFloor3d")&&$("solidFloor3d").checked;
-  if(!solidFloor){ ctx.fillStyle=cssVar("--scene-ground"); ctx.fill(); }
+  ctx.closePath(); ctx.fillStyle=cssVar("--scene-ground"); ctx.fill();
   // grid lines: minor at gridCellMm, major every 5 cells (guard against too many)
   const cell=gridCellMm, major=cell*5;
   const nDiv=2*g/cell;
@@ -1770,9 +1767,6 @@ function draw3DScene(){
   }
   // Door photo draped on the panel (depth-sorted with everything else)
   faces=faces.concat(doorImageFaces(d, openDeg, side));
-  // In solid mode the floor participates in painter sorting, allowing it to
-  // occlude below-ground geometry when the camera is above Z=0.
-  if(solidFloor) faces.push({pts:fc,fill:cssVar("--scene-ground-solid"),stroke:null,lw:0});
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
   faces.sort((a,b)=>b.depth-a.depth);
   faces.forEach(fc=> fc.tex ? drawTexQuad(fc) : face3(fc.pts, fc.fill, fc.stroke, fc.lw));
