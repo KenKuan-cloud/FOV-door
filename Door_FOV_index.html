@@ -1520,10 +1520,9 @@ function doorPrismFaces(openDeg,side){
   return faces;
 }
 // Elliptical FOV cone geometry in 3D world coords (X,Y,Z): hFOV half-angle
-// spreads fore-aft (X), vFOV half-angle in the Y-Z plane. Range is measured
-// along the beam axis and each range ring is a flat ellipse. This produces the
-// straight-sided cone emitted by a physical sensor rather than a rounded,
-// sphere-clipped fan.
+// spreads fore-aft (X), vFOV half-angle in the Y-Z plane. Every point on a
+// range surface is the same radial distance from the sensor, producing a
+// rounded spherical-sector volume instead of a flat-ended projection.
 // Single source of truth for the 3D render and every 2D projection/detection.
 function sensorConeGeom(s, door, openDeg, side, N){
   N=N||36;
@@ -1536,14 +1535,19 @@ function sensorConeGeom(s, door, openDeg, side, N){
   const hx=[cp,           -Math.cos(f)*sp,-Math.sin(f)*sp];  // fore-aft spread axis
   const vx=[0,            -Math.sin(f),    Math.cos(f)    ];  // elevation spread axis
   const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
-  const ring=(R)=>{ const out=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
-    const ch=th*Math.cos(t), sv=tv*Math.sin(t);
-    out.push({x:apex.x+R*(ax[0]+ch*hx[0]+sv*vx[0]),
-              y:apex.y+R*(ax[1]+ch*hx[1]+sv*vx[1]),
-              z:apex.z+R*(ax[2]+ch*hx[2]+sv*vx[2])}); } return out; };
+  const point=(R,u,v)=>{ const dir=V.norm([
+    ax[0]+th*u*hx[0]+tv*v*vx[0], ax[1]+th*u*hx[1]+tv*v*vx[1],
+    ax[2]+th*u*hx[2]+tv*v*vx[2]]);
+    return {x:apex.x+R*dir[0],y:apex.y+R*dir[1],z:apex.z+R*dir[2]}; };
+  const ring=(R,rho=1)=>{ const out=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
+    out.push(point(R,rho*Math.cos(t),rho*Math.sin(t))); } return out; };
   const maxR=Math.max(1,s.maxRangeMm||1), minR=Math.max(0,Math.min(s.minRangeMm||0,maxR));
-  return { apex, axis:ax, far:ring(maxR), near:minR>1 ? ring(minR) : null,
-    axisEnd:{x:apex.x+maxR*ax[0],y:apex.y+maxR*ax[1],z:apex.z+maxR*ax[2]}, N };
+  const outerRings=[]; for(let j=0;j<=5;j++) outerRings.push(ring(maxR,j/5));
+  const cross=(horizontal)=>{ const out=[]; for(let i=-18;i<=18;i++){
+    const q=i/18; out.push(point(maxR,horizontal?q:0,horizontal?0:q)); } return out; };
+  return { apex, axis:ax, far:outerRings[5], near:minR>1 ? ring(minR) : null,
+    outerRings, crossLines:[cross(true),cross(false)],
+    axisEnd:point(maxR,0,0), N };
 }
 // True 2D silhouette of the FOV cone: convex hull of the apex + far cap
 // projected into a view plane ("top" -> X-Y, else front -> Y-Z). This is the
@@ -1555,12 +1559,12 @@ function sensorFovProject(s, door, openDeg, side, plane){
   return convexHull(pts);
 }
 function sensorConeFaces(s,openDeg,side){
-  const {apex, axisEnd, far, near, N}=sensorConeGeom(s, project.door, openDeg, side, 36);
+  const {apex, axisEnd, far, near, outerRings, crossLines, N}=sensorConeGeom(s, project.door, openDeg, side, 36);
   const faces=[];
   const c=sensorColor(s);
   const fill=c+"16", edge=c+"32", edgeFar=c+"b8";
-  const capFill=c+"30"; // translucent far plane makes the beam volume readable
-  if(s.showFov===false) return {faces:[], apex, axisEnd};
+  const capFill=c+"24"; // overlapping facets shade the rounded outer surface
+  if(s.showFov===false) return {faces:[], apex, axisEnd, crossLines:[]};
   if(near){
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[near[i],near[j],far[j],far[i]], fill, stroke:edge, lw:1}); }
@@ -1569,8 +1573,14 @@ function sensorConeFaces(s,openDeg,side){
     for(let i=0;i<N;i++){ const j=(i+1)%N;
       faces.push({pts:[apex,far[i],far[j]], fill, stroke:edge, lw:1}); }
   }
-  faces.push({pts:far, fill:capFill, stroke:edgeFar, lw:1.2});
-  return {faces, apex, axisEnd};
+  // Tessellate the spherical outer cap in concentric rings. All vertices remain
+  // exactly maxRangeMm from the sensor while the facets suggest its curvature.
+  for(let r=0;r<outerRings.length-1;r++){
+    const a=outerRings[r], b=outerRings[r+1];
+    for(let i=0;i<N;i++){ const j=(i+1)%N;
+      faces.push({pts:[a[i],a[j],b[j],b[i]],fill:capFill,stroke:c+"18",lw:.45}); }
+  }
+  return {faces, apex, axisEnd, crossLines};
 }
 function sweptFov3dFaces(door, side){
   const faces=[], N=20, steps=[];
@@ -1592,9 +1602,8 @@ function sweptFov3dFaces(door, side){
       const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
       const ring=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
         const ch=th*Math.cos(t), sv=tv*Math.sin(t), R=s.maxRangeMm;
-        ring.push({x:apex.x+R*(ax[0]+ch*hx[0]+sv*vx[0]),
-                   y:apex.y+R*(ax[1]+ch*hx[1]+sv*vx[1]),
-                   z:apex.z+R*(ax[2]+ch*hx[2]+sv*vx[2])});
+        const dir=V.norm([ax[0]+ch*hx[0]+sv*vx[0],ax[1]+ch*hx[1]+sv*vx[1],ax[2]+ch*hx[2]+sv*vx[2]]);
+        ring.push({x:apex.x+R*dir[0],y:apex.y+R*dir[1],z:apex.z+R*dir[2]});
       }
       rings.push({ring, apex});
     }
@@ -1669,7 +1678,7 @@ function draw3DScene(){
   const apexes=[];
   for(const s of project.sensors){ if(!s.active) continue;
     const fr=sensorConeFaces(s,openDeg,side); faces=faces.concat(fr.faces);
-    apexes.push({s,apex:fr.apex,axisEnd:fr.axisEnd}); }
+    apexes.push({s,apex:fr.apex,axisEnd:fr.axisEnd,crossLines:fr.crossLines}); }
   // Swept FOV 3D: cone envelope across all door positions
   if($("showSweptFov3d")&&$("showSweptFov3d").checked){
     faces=faces.concat(sweptFov3dFaces(d,side));
@@ -1729,6 +1738,12 @@ function draw3DScene(){
   // A subtle centre ray gives the translucent volume a clear sensing direction.
   apexes.forEach(({s,apex,axisEnd})=>{
     if(s.showFov!==false && axisEnd) line3(apex,axisEnd,sensorColor(s)+"aa",1.25);
+  });
+  // Horizontal and vertical great-circle sections make the spherical range
+  // boundary explicit and remain useful from every orbit-camera angle.
+  apexes.forEach(({s,crossLines})=>{ if(s.showFov===false) return;
+    (crossLines||[]).forEach(line=>{ for(let i=1;i<line.length;i++)
+      line3(line[i-1],line[i],sensorColor(s)+"e6",1.5); });
   });
   // hinge (roof line along X)
   line3({x:d.hingeX-(d.lengthMm||1000)/2,y:d.hingeY,z:d.hingeZ},
@@ -3216,17 +3231,19 @@ function runSelfTests(){
     p700r.length===10 && p700r[0].y===0 && p700r[0].z===0 && DOOR_PROFILE_PRESETS["p700r"].side==="LH"]);
   results.push(["simplifyDP collapses straight run",
     simplifyDP([{x:0,y:0},{x:5,y:0},{x:10,y:0}],1).length===2]);
-  // 3D: door prism is complete and every far-ring point lies on one plane at
-  // max range along the beam axis (a true cone, not a spherical-sector cap).
+  // 3D: door prism is complete and every outer-surface point lies exactly at
+  // max range from the sensor (a rounded spherical-sector cap).
   const dp=defaultProject();
   const pf=withProject(dp, ()=>doorPrismFaces(0,"LH"));
   results.push(["3D door prism face count", pf.length===2+dp.door.profile.length]);
   const fr=withProject(dp, ()=>sensorConeFaces(dp.sensors[0],0,"LH"));
   results.push(["3D FOV cone faces + apex", fr.faces.length>8 && isFinite(fr.apex.y)]);
   const cg=withProject(dp, ()=>sensorConeGeom(dp.sensors[0],dp.door,0,"LH",36));
-  const axial=cg.far.map(q=>V.dot([q.x-cg.apex.x,q.y-cg.apex.y,q.z-cg.apex.z],cg.axis));
-  results.push(["3D FOV far ring is planar at max range",
-    axial.every(r=>Math.abs(r-dp.sensors[0].maxRangeMm)<1e-6)]);
+  const radii=cg.outerRings.flat().map(q=>Math.hypot(q.x-cg.apex.x,q.y-cg.apex.y,q.z-cg.apex.z));
+  results.push(["3D FOV outer surface has constant max radius",
+    radii.every(r=>Math.abs(r-dp.sensors[0].maxRangeMm)<1e-6)]);
+  results.push(["3D FOV outer surface has horizontal + vertical cross lines",
+    cg.crossLines.length===2 && cg.crossLines.every(line=>line.length===37)]);
   // 3D camera: spherical basis is orthonormal with world-up fixed (no roll).
   const cam=withProject(dp, ()=>{ project.view3d.az=-0.9; project.view3d.polar=0.95;
     const b=cam3Basis();
