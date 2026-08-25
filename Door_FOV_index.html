@@ -419,6 +419,19 @@ a.dl{color:var(--accent)}
             <button onclick="recomputeCoverage()" style="font-size:11px;margin-bottom:9px">Recompute</button>
           </div>
         </div>
+        <div class="group" style="margin-bottom:12px">
+          <span class="group-cap">Scan front X</span>
+          <p class="mini" style="color:var(--muted);margin:0 0 6px">Sweep every Front zone
+            along fore-aft X and plot the 3D include-coverage score at each step. Click a
+            bar to place the Front zones there.</p>
+          <div class="row" style="align-items:flex-end">
+            <div class="field"><label>From X</label><input id="z_scanFrom" type="number" value="-1000" step="50"></div>
+            <div class="field"><label>To X</label><input id="z_scanTo" type="number" value="1000" step="50"></div>
+            <div class="field" style="max-width:70px"><label>Step</label><input id="z_scanStep" type="number" value="100" min="20"></div>
+            <button class="primary" onclick="scanFrontX()" style="margin-bottom:9px">Scan</button>
+          </div>
+          <div id="z_scanResult"></div>
+        </div>
         <div id="zoneList"></div>
         <p class="mini" style="color:var(--muted);margin-top:4px">Distances are outboard
           from the vehicle side (mm); heights are above ground (mm).</p>
@@ -457,10 +470,11 @@ a.dl{color:var(--accent)}
       <div class="panel" data-tab="optimize">
         <h2>Optimize Sensors</h2>
         <p class="hint">Searches the active sensors to <b>maximise</b> worst-case
-          coverage of <b>Include</b> zones while <b>minimising</b> intrusion into
-          <b>Exclude</b> zones (weighted). Set each zone's role in the Zones tab.
-          The search runs on a coarser grid for speed; the final result is re-scored
-          at your normal grid.</p>
+          <b>3D coverage</b> of <b>Include</b> zones while <b>minimising</b> intrusion
+          into <b>Exclude</b> zones (weighted). Every candidate is scored with the same
+          3D voxel test the Zones tab uses (points tested against each sensor's FOV
+          volume). Set each zone's role in the Zones tab. The search runs on a coarser
+          grid for speed; the final result is re-scored at your normal grid.</p>
         <div class="group">
           <span class="group-cap">What to search</span>
           <div class="field"><label>Mode</label>
@@ -1259,6 +1273,15 @@ function coverageScore(metrics){
   let wsum=0, acc=0;
   for(const k in metrics){ const m=metrics[k]; if(m.role==="exclude"||m.role==="none") continue;
     const w=m.weight||1; wsum+=w; acc+=w*m.worst; }
+  return wsum? acc/wsum : 0;
+}
+// Weighted MEAN coverage across INCLUDE zones — used by the X scan, which needs
+// a figure that varies smoothly with placement (worst-case is often 0 for a
+// single door-mounted sensor across the full travel).
+function coverageMeanScore(metrics){
+  let wsum=0, acc=0;
+  for(const k in metrics){ const m=metrics[k]; if(m.role==="exclude"||m.role==="none") continue;
+    const w=m.weight||1; wsum+=w; acc+=w*m.mean; }
   return wsum? acc/wsum : 0;
 }
 // Optimizer objective: reward INCLUDE worst-case coverage, penalise the peak
@@ -3313,11 +3336,13 @@ function updateZoneStats(){
   for(const z of project.zones){
     const el=$("zstat_"+z.id); if(!el) continue;
     const cm=m[z.id]||{worst:0,mean:0,total:0,perPos:[]};
+    const roleColor = z.role==="exclude"?"var(--red)":z.role==="none"?"var(--muted)":"var(--green)";
+    const tag=`<span style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:${roleColor}">${z.role}</span> · `;
     el.innerHTML=cm.total
-      ? `worst <b style="color:${coverColor(cm.worst)}">${cm.worst.toFixed(0)}%</b>`
+      ? tag+`worst <b style="color:${coverColor(cm.worst)}">${cm.worst.toFixed(0)}%</b>`
         +` · mean <b>${cm.mean.toFixed(0)}%</b>`
         +` <span style="letter-spacing:1px;color:var(--muted)" title="coverage across door 0→100%">${sparkline(cm.perPos.map(p=>p.cov))}</span>`
-      : `<span style="color:var(--muted)">no samples in band</span>`;
+      : tag+`<span style="color:var(--muted)">no samples in band</span>`;
   }
 }
 function addZone(plane){
@@ -3338,6 +3363,51 @@ function firstZoneVal(plane, key, dflt){
 }
 function setPlaneX(v){ project.zones.forEach(z=>{ if(z.plane!=="top") z.xAt=v; });
   coverageCache=null; updateZoneStats(); render(); }
+// Sweep all Front zones along X and score the 3D include-coverage at each step.
+function scanFrontX(){
+  const host=$("z_scanResult"); if(!host) return;
+  if(!project.zones.some(z=>z.plane!=="top")){ host.innerHTML=`<p class="mini" style="color:var(--red)">No Front zones to scan.</p>`; return; }
+  const from=parseFloat($("z_scanFrom").value), to=parseFloat($("z_scanTo").value);
+  const step=Math.max(20,parseFloat($("z_scanStep").value)||100);
+  if(!isFinite(from)||!isFinite(to)||to<from){ host.innerHTML=`<p class="mini" style="color:var(--red)">Check the From/To range.</p>`; return; }
+  const orig=firstZoneVal("front","xAt",0);
+  const opts={ zones:project.zones, gridMm:(project.overlap&&project.overlap.gridMm)||60,
+    positions:project.door.positionsPct };
+  const rows=[]; let bestX=from, bestS=-1;
+  for(let x=from; x<=to+1e-6; x+=step){
+    project.zones.forEach(z=>{ if(z.plane!=="top") z.xAt=x; });
+    const m=coverageMetrics(project,opts);
+    const s=coverageMeanScore(m), worst=coverageScore(m);
+    rows.push({x:Math.round(x), s, worst}); if(s>bestS){ bestS=s; bestX=Math.round(x); }
+  }
+  // restore the original placement (user applies a bar to change it)
+  project.zones.forEach(z=>{ if(z.plane!=="top") z.xAt=orig; });
+  coverageCache=null;
+  const max=Math.max(1,...rows.map(r=>r.s));
+  const bars=rows.map(r=>{
+    const w=Math.round(r.s/max*100), best=r.x===bestX;
+    return `<div data-scanx="${r.x}" title="Place Front zones at X=${r.x} · mean ${r.s.toFixed(0)}% · worst ${r.worst.toFixed(0)}%"
+        style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:1px 2px;border-radius:4px;${best?'background:rgba(77,163,255,.14)':''}">
+        <span style="width:44px;text-align:right;color:var(--muted);font-size:10px">${r.x}</span>
+        <span style="flex:1;height:11px;background:var(--panel2);border-radius:3px;overflow:hidden">
+          <span style="display:block;height:100%;width:${w}%;background:${best?'var(--accent)':'var(--gray)'}"></span></span>
+        <span style="width:34px;font-size:10px;color:${coverColor(r.s)}">${r.s.toFixed(0)}%</span>
+        ${best?'<span style="color:var(--accent);font-size:10px">★</span>':''}
+      </div>`; }).join("");
+  host.innerHTML=`<p class="mini" style="color:var(--muted);margin:6px 0 2px">Bar = weighted include <b>mean</b> 3D coverage (hover for worst-case).</p>
+    <div>${bars}</div>
+    <div class="row" style="align-items:center;margin-top:6px">
+      <span class="mini" style="flex:1">Best: <b>X=${bestX}</b> → ${bestS.toFixed(0)}% mean</span>
+      <button onclick="applyScanX(${bestX})" style="font-size:10px">Apply best</button>
+    </div>`;
+  host.querySelectorAll("[data-scanx]").forEach(el=>
+    el.addEventListener("click",()=>applyScanX(parseFloat(el.dataset.scanx))));
+}
+function applyScanX(x){
+  project.zones.forEach(z=>{ if(z.plane!=="top") z.xAt=x; });
+  const fx=$("z_frontX"); if(fx) fx.value=x;
+  coverageCache=null; updateZoneStats(); render();
+}
 function setPlaneZ(v){ project.zones.forEach(z=>{ if(z.plane==="top") z.zAt=v; });
   coverageCache=null; updateZoneStats(); render(); }
 function renderZonePanel(){
@@ -3366,60 +3436,61 @@ function renderZonePanel(){
            <div class="field"><label>Z low (mm)</label><input data-zk="zLow" type="number" value="${z.zLow}"></div>
            <div class="field"><label>Z high (mm)</label><input data-zk="zHigh" type="number" value="${z.zHigh}"></div>
          </div>`;
-    const roleColor = z.role==="exclude"?"var(--red)":z.role==="none"?"var(--muted)":"var(--green)";
-    const div=document.createElement("div"); div.className="group";
-    if(!z.visible) div.style.opacity="0.55";
+    const collapsed = z._uiCollapsed!==false;
+    const div=document.createElement("div"); div.className="list-item";
     div.innerHTML=`
-      <span class="group-cap" style="color:${z.color}">${escapeHtml(z.name)}</span>
-      <div class="row" style="align-items:center;margin-bottom:6px">
-        <button data-zvis="1" title="Show / hide this zone"
-          style="font-size:14px;line-height:1;padding:2px 6px;border-radius:6px">${z.visible?"👁":"🚫"}</button>
-        <span data-zk="roletag" style="font-size:9px;font-weight:600;text-transform:uppercase;
-          letter-spacing:.05em;color:${roleColor}">${z.role}</span>
-        <span style="flex:1"></span>
-        <span class="mini" id="zstat_${z.id}"></span>
-      </div>
-      <div class="row">
-        <div class="field"><label>Name</label><input data-zk="name" value="${escapeHtml(z.name)}"></div>
-        <div class="field" style="max-width:96px"><label>Plane</label>
-          <select data-zk="plane">
-            <option value="front" ${z.plane!=="top"?"selected":""}>Front (Y–Z)</option>
-            <option value="top" ${z.plane==="top"?"selected":""}>Top (X–Y)</option>
-          </select></div>
-      </div>
-      <div class="row">
-        <div class="field"><label>Role (optimize)</label>
-          <select data-zk="role">
-            <option value="include" ${z.role==="include"?"selected":""}>Include — maximise</option>
-            <option value="exclude" ${z.role==="exclude"?"selected":""}>Exclude — avoid</option>
-            <option value="none" ${z.role==="none"?"selected":""}>Ignore</option>
-          </select></div>
-        <div class="field" style="max-width:72px"><label>Weight</label>
-          <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
-        <div class="field" style="max-width:48px"><label>Colour</label>
-          <input data-zk="color" type="color" value="${z.color}" style="padding:1px;height:28px"></div>
-      </div>
-      ${geoRows}
-      <div class="row" style="justify-content:flex-end;margin-top:2px">
-        <button data-zdel="1" style="font-size:10px;padding:3px 10px">Delete</button>
+      <div class="top"><strong data-znamelabel style="color:${z.color}">${escapeHtml(z.name)}</strong>
+        <span>
+          <label class="mini"><input type="checkbox" data-zk="visible" ${z.visible?"checked":""}> show</label>
+          <input type="color" data-zk="color" value="${z.color}" title="Zone colour"
+            style="width:28px;height:22px;padding:1px 2px;border:none;background:none;cursor:pointer;vertical-align:middle">
+          <button class="sensor-toggle" data-toggle="details">${collapsed?"▶ Show":"▼ Hide"}</button>
+          <button data-zdel="1" title="Delete zone">✕</button>
+        </span></div>
+      <div class="mini" style="margin-bottom:4px"><span id="zstat_${z.id}"></span></div>
+      <div class="sensor-details${collapsed?" collapsed":""}" style="max-height:${collapsed?0:600}px">
+        <div class="row">
+          <div class="field"><label>Name</label><input data-zk="name" value="${escapeHtml(z.name)}"></div>
+          <div class="field" style="max-width:96px"><label>Plane</label>
+            <select data-zk="plane">
+              <option value="front" ${z.plane!=="top"?"selected":""}>Front (Y–Z)</option>
+              <option value="top" ${z.plane==="top"?"selected":""}>Top (X–Y)</option>
+            </select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Role (optimize)</label>
+            <select data-zk="role">
+              <option value="include" ${z.role==="include"?"selected":""}>Include — maximise</option>
+              <option value="exclude" ${z.role==="exclude"?"selected":""}>Exclude — avoid</option>
+              <option value="none" ${z.role==="none"?"selected":""}>Ignore</option>
+            </select></div>
+          <div class="field" style="max-width:72px"><label>Weight</label>
+            <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
+        </div>
+        ${geoRows}
       </div>`;
+    div.querySelector("[data-toggle=details]").addEventListener("click",function(){
+      const det=div.querySelector(".sensor-details");
+      const isCol=det.classList.contains("collapsed");
+      det.style.maxHeight=isCol?det.scrollHeight+"px":"0";
+      det.classList.toggle("collapsed"); z._uiCollapsed=!isCol;
+      this.textContent=isCol?"▼ Hide":"▶ Show";
+    });
     div.querySelectorAll("[data-zk]").forEach(inp=>{
-      const k=inp.dataset.zk; if(k==="roletag") return;
-      const ev=(inp.type==="color"||inp.tagName==="SELECT")?"change":"input";
+      const k=inp.dataset.zk;
+      const ev=(inp.type==="checkbox"||inp.type==="color"||inp.tagName==="SELECT")?"change":"input";
       inp.addEventListener(ev,()=>{
+        if(k==="visible"){ z.visible=inp.checked; updateZoneStats(); render(); return; }
         if(k==="plane"){ z.plane=inp.value;
           if(z.plane!=="top") z.xAt=firstZoneVal("front","xAt",0); else z.zAt=firstZoneVal("top","zAt",0);
           coverageCache=null; renderZonePanel(); render(); return; }
-        else if(k==="role"){ z.role=inp.value; coverageCache=null; renderZonePanel(); render(); return; }
+        else if(k==="role"){ z.role=inp.value; coverageCache=null; updateZoneStats(); render(); return; }
         else if(k==="name"||k==="color"){ z[k]=inp.value;
-          if(k==="color"){ const cap=div.querySelector(".group-cap");
-            if(cap) cap.style.color=inp.value; } }
+          const lab=div.querySelector("[data-znamelabel]");
+          if(lab){ lab.textContent=z.name; lab.style.color=z.color; } }
         else z[k]=parseFloat(inp.value)||0;
         coverageCache=null; updateZoneStats(); render();
       });
-    });
-    div.querySelector("[data-zvis]").addEventListener("click",()=>{
-      z.visible=!z.visible; renderZonePanel(); render();
     });
     div.querySelector("[data-zdel]").addEventListener("click",()=>{
       project.zones.splice(idx,1); coverageCache=null; renderZonePanel(); render();
