@@ -183,6 +183,9 @@ a.dl{color:var(--accent)}
       <button data-tab="results">Results</button>
       <span class="tabgroup-label">View</span>
       <button data-tab="regions">Regions</button>
+      <span class="tabgroup-label">Coverage</span>
+      <button data-tab="zones">Zones</button>
+      <button data-tab="compare">Compare</button>
     </div>
     <div class="panels">
 
@@ -387,6 +390,55 @@ a.dl{color:var(--accent)}
         <div id="regionList" style="margin-top:6px"></div>
       </div>
 
+      <!-- Coverage zones (front Y-Z plane) -->
+      <div class="panel" data-tab="zones">
+        <h2>Coverage Zones</h2>
+        <p class="hint">Zones are fixed bands in the <b>Front (Y–Z)</b> plane — they
+          stay put while the door lifts. Coverage = the share of a zone that falls
+          inside any active sensor's FOV. Because the sensors ride the door, it is
+          measured at every door position; <b>Worst</b> (the smallest across all
+          positions) is the safety-relevant figure. Turn on <b>Coverage zones</b>
+          in the toolbar overlays to see covered (green) vs gap (red) samples.</p>
+        <div class="row" style="align-items:center;margin-bottom:8px">
+          <label style="font-size:11px;flex:1">Grid step (mm)
+            <input id="z_grid" type="number" min="20" step="10" style="width:70px;font-size:11px">
+          </label>
+          <button onclick="recomputeCoverage()" style="font-size:11px">Recompute</button>
+        </div>
+        <div id="zoneList"></div>
+        <p class="mini" style="color:var(--muted);margin-top:4px">Distances are outboard
+          from the vehicle side (mm); heights are above ground (mm).</p>
+      </div>
+
+      <!-- Compare two sensor layouts -->
+      <div class="panel" data-tab="compare">
+        <h2>Compare Layouts</h2>
+        <p class="hint">Load two saved project JSON files that differ only in their
+          <b>sensors</b> (positions / angles). The <b>door geometry must match</b> —
+          the comparison is rejected otherwise, since the coverage numbers would not
+          be comparable. Zones and grid step are taken from the current project so
+          both sides are scored identically.</p>
+        <div class="row" style="gap:8px">
+          <div class="field" style="flex:1">
+            <label>Config A</label>
+            <button onclick="loadCompareFile('A')" style="width:100%">Load A…</button>
+            <p class="mini" id="cmpAName" style="color:var(--muted);min-height:14px"></p>
+          </div>
+          <div class="field" style="flex:1">
+            <label>Config B</label>
+            <button onclick="loadCompareFile('B')" style="width:100%">Load B…</button>
+            <p class="mini" id="cmpBName" style="color:var(--muted);min-height:14px"></p>
+          </div>
+        </div>
+        <div class="row" style="align-items:center;margin-bottom:6px">
+          <button class="primary" onclick="runCompare()" style="flex:1">Compare</button>
+          <button onclick="useCurrentAsCompare('A')" title="Use the current project as Config A">A = current</button>
+          <button onclick="useCurrentAsCompare('B')" title="Use the current project as Config B">B = current</button>
+        </div>
+        <p class="mini" id="cmpStatus" style="min-height:14px;color:var(--accent)"></p>
+        <div id="cmpResult"></div>
+      </div>
+
     </div>
   </div>
 
@@ -448,6 +500,7 @@ a.dl{color:var(--accent)}
           <label><input type="checkbox" id="showSweptFov3d" onchange="render()"> 3D swept FOV</label>
           <label title="Hide portions of 3D sensor beams below ground level"><input type="checkbox" id="clipFovGround3d" onchange="render()" checked> Clip FOV at Z=0</label>
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
+          <label title="Show coverage zones + covered/gap samples on the Front view"><input type="checkbox" id="showZones"> Coverage zones</label>
           <label><input type="checkbox" id="showTpIds"> Point IDs</label>
         </div>
         <div class="tb-cluster">
@@ -541,6 +594,33 @@ function wingDefaultProfile(){
     {y:-760, z:-80}     // back toward hinge (inner)
   ];
 }
+// Coverage zones live in the FRONT (Y-Z) plane and are fixed in the world (they
+// do NOT ride the door). Each is an axis-aligned band described by an outboard
+// distance range (yNear..yFar, mm from the vehicle side, always positive) and a
+// height range (zLow..zHigh, mm above ground). The outboard direction flips with
+// the door side, so the band is mirrored into plane coords at draw/measure time.
+const ZONE_PALETTE=["#e3b341","#4da3ff","#a371f7","#39d353","#ff9800"];
+function defaultZones(){
+  return [
+    { id:"Z_ground", name:"Ground", color:"#e3b341",
+      yNear:0,    yFar:1600, zLow:0,   zHigh:300,  visible:true, weight:1 },
+    { id:"Z_close",  name:"Close zone", color:"#f85149",
+      yNear:900,  yFar:1500, zLow:200, zHigh:1600, visible:true, weight:2 },
+    { id:"Z_near",   name:"Near zone", color:"#4da3ff",
+      yNear:1500, yFar:2500, zLow:200, zHigh:1600, visible:true, weight:1 },
+  ];
+}
+// Four corners of a zone band in front-plane coords ({x:Y, y:Z}). Outboard is
+// -X for a LEFT door, +X for a RIGHT door (matches doorLocalToPlane mirroring).
+function zonePolygon(zone, side){
+  const so = side==="RH" ? 1 : -1;
+  return [
+    { x: so*zone.yNear, y: zone.zLow },
+    { x: so*zone.yFar,  y: zone.zLow },
+    { x: so*zone.yFar,  y: zone.zHigh },
+    { x: so*zone.yNear, y: zone.zHigh },
+  ];
+}
 function defaultProject(){
   return {
     schemaVersion:2,
@@ -556,6 +636,9 @@ function defaultProject(){
     testSets:[],
     // User-drawn map regions (top X-Y view): measured-FOV / coverage areas.
     regions:[],
+    // Coverage zones (front Y-Z plane): parametric bands whose % coverage by
+    // the union of active sensor FOVs is tracked across all door positions.
+    zones: defaultZones(),
     // System response chain (§12.4) in ms + evaluation thresholds (§12.5).
     timing:{ sensorMs:60, commMs:20, ecuMs:30, motorMs:40, mechMs:150,
       targetMarginMs:200, minClearanceMm:50, gridStepPct:0.5 },
@@ -978,6 +1061,61 @@ function computeConfigMetrics(cfg){
   });
 }
 
+/* ---- Coverage zones: per-zone % covered by the union of active FOVs ----
+   Coverage is evaluated in the FRONT (Y-Z) plane — the plane the door lifts in.
+   A fixed zone band is sampled on a grid; a sample counts as covered at a given
+   door position when it falls inside ANY active sensor's projected FOV polygon.
+   Because the sensors ride the door, coverage is computed at every door position
+   and reported as worst-case (the safety-relevant figure), mean, and a curve.
+   Pure: it swaps `project` via withProject so any cfg is measured identically. */
+function zoneSamplePoints(zone, side, gridMm){
+  const poly=zonePolygon(zone, side);
+  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
+  poly.forEach(p=>{minx=Math.min(minx,p.x);maxx=Math.max(maxx,p.x);
+    miny=Math.min(miny,p.y);maxy=Math.max(maxy,p.y);});
+  const step=Math.max(20, gridMm||60), pts=[];
+  for(let x=minx;x<=maxx+1e-6;x+=step) for(let y=miny;y<=maxy+1e-6;y+=step)
+    if(pointInPolygon({x,y},poly)) pts.push({x,y});
+  return pts;
+}
+function coverageMetrics(cfg, opts){
+  opts=opts||{};
+  return withProject(cfg, ()=>{
+    const side=cfg.project.doorSide;
+    const zones=opts.zones || cfg.zones || [];
+    const positions=(opts.positions && opts.positions.length)
+      ? opts.positions : (cfg.door.positionsPct || [0,50,100]);
+    const gridMm=Math.max(20, opts.gridMm || (cfg.overlap&&cfg.overlap.gridMm) || 60);
+    const activeSensors=cfg.sensors.filter(s=>s.active && s.showFov!==false);
+    const out={};
+    for(const z of zones){
+      const samples=zoneSamplePoints(z, side, gridMm);
+      const total=samples.length, perPos=[];
+      let sum=0, worst=total?101:0, best=0;
+      for(const pct of positions){
+        const od=doorAngleForPercent(pct,cfg.door,side);
+        const fovs=activeSensors.map(s=>sensorFovProject(s,cfg.door,od,side,"front"));
+        let covered=0;
+        for(const pt of samples)
+          if(fovs.some(f=>f.length>=3 && pointInPolygon(pt,f))) covered++;
+        const cov=total? covered/total*100 : 0;
+        perPos.push({pct, cov});
+        sum+=cov; worst=Math.min(worst,cov); best=Math.max(best,cov);
+      }
+      out[z.id]={ id:z.id, name:z.name, color:z.color, weight:z.weight||1,
+        total, gridMm, worst: total?worst:0, best,
+        mean: positions.length? sum/positions.length : 0, perPos };
+    }
+    return out;
+  });
+}
+// Weighted overall score (worst-case, zone weights) — used by Compare/Optimize.
+function coverageScore(metrics){
+  let wsum=0, acc=0;
+  for(const k in metrics){ const m=metrics[k], w=m.weight||1; wsum+=w; acc+=w*m.worst; }
+  return wsum? acc/wsum : 0;
+}
+
 /* ====================== 4. RENDERING ======================
    Draw functions use the module-level "current target": ctx/W/H (the canvas
    being drawn), curPlane, and curView (its zoom/pan). renderPane() points these
@@ -1388,6 +1526,8 @@ function drawScene(){
   drawHinge();
   project.sensors.forEach(s=>drawSensor(s,openDeg,side));
   drawRegions();
+  drawZones();
+  drawCompareOverlay();
   drawObstacles();
   drawProximityLines();
   drawTestPoints();
@@ -2076,6 +2216,37 @@ function drawRegions(){
       c.x+6, c.y-6);
   }
 }
+// Coverage zones on the FRONT view: dashed band + covered/uncovered sample dots
+// (green = inside a FOV at the current door position, red = gap) + a live %.
+function drawZones(){
+  if(curPlane!=="front" || !$("showZones") || !$("showZones").checked || !project.zones) return;
+  const side=project.project.doorSide;
+  const od=doorAngleForPercent(project.view.doorPct,project.door,side);
+  const fovs=project.sensors.filter(s=>s.active && s.showFov!==false)
+    .map(s=>sensorFovProject(s,project.door,od,side,"front"));
+  const gridMm=Math.max(20,(project.overlap&&project.overlap.gridMm)||60);
+  for(const z of project.zones){
+    if(!z.visible) continue;
+    const poly=zonePolygon(z, side);
+    polyPath(poly);
+    ctx.fillStyle=hexToRgba(z.color,0.06); ctx.fill();
+    ctx.save(); ctx.setLineDash([6,4]);
+    ctx.strokeStyle=z.color; ctx.lineWidth=1.5; ctx.stroke(); ctx.restore();
+    const samples=zoneSamplePoints(z, side, gridMm);
+    let covered=0;
+    for(const pt of samples){
+      const inFov=fovs.some(f=>f.length>=3 && pointInPolygon(pt,f));
+      if(inFov) covered++;
+      const q=worldToScreen(pt);
+      ctx.fillStyle= inFov ? "rgba(57,211,83,.55)" : "rgba(248,81,73,.5)";
+      ctx.beginPath(); ctx.arc(q.x,q.y,1.6,0,7); ctx.fill();
+    }
+    const cov=samples.length? Math.round(covered/samples.length*100):0;
+    const lp=worldToScreen(poly[3]); // (yNear, zHigh) — top inner corner
+    ctx.fillStyle=z.color; ctx.font="11px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(`${z.name}  ${cov}%`, lp.x+4, lp.y-4);
+  }
+}
 // The top-view pane canvas (right pane in split, else the single pane).
 function topCanvas(){ return project.view.plane==="split" ? cv2El : cvEl; }
 // Point the render target at a canvas+pane so world<->screen maths line up.
@@ -2138,6 +2309,12 @@ function bindTabs(){
     document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.dataset.tab===b.dataset.tab));
     if(b.dataset.tab==="results") renderTpTable();
     if(b.dataset.tab==="regions") renderRegionList();
+    if(b.dataset.tab==="zones"){
+      if($("showZones")) $("showZones").checked=true;
+      if(project.view.plane!=="front" && project.view.plane!=="split") setViewPlane("front");
+      coverageCache=null; renderZonePanel(); render();
+    }
+    if(b.dataset.tab==="compare") renderComparePanel();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
@@ -2931,6 +3108,217 @@ function renderDockTable(){
 }
 
 
+/* ====================== 5b. COVERAGE ZONES UI ====================== */
+function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,
+  c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function coverColor(pct){ return pct>=80?"var(--green)":pct>=50?"var(--yellow)":"var(--red)"; }
+function sparkline(vals){ const bars="▁▂▃▄▅▆▇█";
+  return vals.map(v=>bars[Math.min(7,Math.max(0,Math.round(v/100*7)))]).join(""); }
+
+let coverageCache=null;
+function recomputeCoverage(){
+  const g=$("z_grid"); if(g){ const v=parseFloat(g.value); if(v>=20){
+    project.overlap=project.overlap||{}; project.overlap.gridMm=v; } }
+  coverageCache=coverageMetrics(project,{});
+  renderZonePanel(); render(); return coverageCache;
+}
+// Recompute the worst/mean labels in-place (no rebuild → typing keeps focus).
+function updateZoneStats(){
+  const m=coverageMetrics(project,{}); coverageCache=m;
+  for(const z of project.zones){
+    const el=$("zstat_"+z.id); if(!el) continue;
+    const cm=m[z.id]||{worst:0,mean:0,total:0,perPos:[]};
+    el.innerHTML=cm.total
+      ? `worst <b style="color:${coverColor(cm.worst)}">${cm.worst.toFixed(0)}%</b>`
+        +` · mean <b>${cm.mean.toFixed(0)}%</b>`
+        +` <span style="letter-spacing:1px;color:var(--muted)" title="coverage across door 0→100%">${sparkline(cm.perPos.map(p=>p.cov))}</span>`
+      : `<span style="color:var(--muted)">no samples in band</span>`;
+  }
+}
+function addZone(){
+  const i=project.zones.length;
+  project.zones.push({ id:"Z"+Date.now().toString(36), name:"Zone "+(i+1),
+    color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500, zLow:0, zHigh:1500,
+    visible:true, weight:1 });
+  coverageCache=null; renderZonePanel(); render();
+}
+function renderZonePanel(){
+  const g=$("z_grid"); if(g && document.activeElement!==g)
+    g.value=(project.overlap&&project.overlap.gridMm)||60;
+  const host=$("zoneList"); if(!host) return; host.innerHTML="";
+  project.zones.forEach((z,idx)=>{
+    const div=document.createElement("div"); div.className="group";
+    div.innerHTML=`
+      <span class="group-cap" style="color:${z.color}">${escapeHtml(z.name)}</span>
+      <div class="row" style="align-items:center;margin-bottom:6px">
+        <label class="mini" style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" data-zk="visible" ${z.visible?"checked":""}> show</label>
+        <span style="flex:1"></span>
+        <span class="mini" id="zstat_${z.id}"></span>
+      </div>
+      <div class="row">
+        <div class="field"><label>Name</label><input data-zk="name" value="${escapeHtml(z.name)}"></div>
+        <div class="field" style="max-width:74px"><label>Weight</label>
+          <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
+        <div class="field" style="max-width:44px"><label>Colour</label>
+          <input data-zk="color" type="color" value="${z.color}" style="padding:1px;height:28px"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
+        <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <div class="field"><label>Z low (mm)</label><input data-zk="zLow" type="number" value="${z.zLow}"></div>
+        <div class="field"><label>Z high (mm)</label><input data-zk="zHigh" type="number" value="${z.zHigh}"></div>
+        <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
+      </div>`;
+    div.querySelectorAll("[data-zk]").forEach(inp=>{
+      const k=inp.dataset.zk;
+      const ev=(inp.type==="checkbox"||inp.type==="color")?"change":"input";
+      inp.addEventListener(ev,()=>{
+        if(k==="visible") z.visible=inp.checked;
+        else if(k==="name"||k==="color"){ z[k]=inp.value;
+          if(k==="color"){ const cap=div.querySelector(".group-cap");
+            if(cap) cap.style.color=inp.value; } }
+        else z[k]=parseFloat(inp.value)||0;
+        coverageCache=null; updateZoneStats(); render();
+      });
+    });
+    div.querySelector("[data-zdel]").addEventListener("click",()=>{
+      project.zones.splice(idx,1); coverageCache=null; renderZonePanel(); render();
+    });
+    host.appendChild(div);
+  });
+  const add=document.createElement("button");
+  add.textContent="+ Add zone"; add.className="primary";
+  add.onclick=addZone; host.appendChild(add);
+  updateZoneStats();
+}
+
+/* ====================== 5c. COMPARE LAYOUTS ====================== */
+let compareData={A:null,B:null};
+let compareOverlayOn=false;
+// Door-geometry signature: the fields whose change would make two coverage
+// numbers incomparable. Sensors are deliberately excluded — that is what varies.
+function doorSignature(cfg){
+  const d=cfg.door||{};
+  return JSON.stringify({ side:cfg.project.doorSide,
+    hingeX:d.hingeX, hingeY:d.hingeY, hingeZ:d.hingeZ,
+    heightMm:d.heightMm, lengthMm:d.lengthMm, maxOpenDeg:d.maxOpenDeg,
+    baseAngleDeg:d.baseAngleDeg, profile:d.profile, positionsPct:d.positionsPct });
+}
+function loadCompareFile(which){
+  const inp=document.createElement("input"); inp.type="file";
+  inp.accept=".json,application/json";
+  inp.onchange=()=>{ const f=inp.files[0]; if(!f) return;
+    const rd=new FileReader();
+    rd.onload=()=>{ try{
+      const cfg=normalizeLoaded(JSON.parse(rd.result));
+      compareData[which]=cfg;
+      $("cmp"+which+"Name").textContent=f.name+" — "+(cfg.project.name||"(unnamed)")
+        +" · "+cfg.sensors.length+" sensors";
+      $("cmpStatus").textContent="";
+    }catch(e){ alert("Invalid JSON: "+e.message); } };
+    rd.readAsText(f); };
+  inp.click();
+}
+function useCurrentAsCompare(which){
+  compareData[which]=normalizeLoaded(JSON.parse(JSON.stringify(project)));
+  $("cmp"+which+"Name").textContent="(current project) — "
+    +(project.project.name||"(unnamed)")+" · "+project.sensors.length+" sensors";
+  $("cmpStatus").textContent="";
+}
+function renderComparePanel(){
+  ["A","B"].forEach(w=>{ const c=compareData[w], el=$("cmp"+w+"Name");
+    if(el && c && !el.textContent) el.textContent=(c.project.name||"(unnamed)")
+      +" · "+c.sensors.length+" sensors"; });
+}
+function runCompare(){
+  const A=compareData.A, B=compareData.B, st=$("cmpStatus");
+  if(!A||!B){ st.style.color="var(--red)";
+    st.textContent="Load both Config A and Config B first."; return; }
+  if(doorSignature(A)!==doorSignature(B)){ st.style.color="var(--red)";
+    st.textContent="✗ Door geometry differs between A and B — coverage is not "
+      +"comparable. The two files must share the same door (side, hinge, profile, "
+      +"max-open, positions) and differ only in sensors.";
+    $("cmpResult").innerHTML=""; compareOverlayOn=false; render(); return; }
+  if(!project.zones || !project.zones.length){ st.style.color="var(--red)";
+    st.textContent="Define at least one coverage zone (Zones tab) first."; return; }
+  st.style.color="var(--accent)"; st.textContent="✓ Door matches — compared on "
+    +project.zones.length+" zone(s), grid "+((project.overlap&&project.overlap.gridMm)||60)+" mm.";
+  const opts={ zones:project.zones, gridMm:(project.overlap&&project.overlap.gridMm)||60,
+    positions:project.door.positionsPct };
+  const mA=coverageMetrics(A,opts), mB=coverageMetrics(B,opts);
+  renderCompareTable(mA,mB);
+  compareOverlayOn=true; render();
+}
+function renderCompareTable(mA,mB){
+  const rows=project.zones.map(z=>{
+    const a=mA[z.id]||{worst:0,mean:0,total:0}, b=mB[z.id]||{worst:0,mean:0,total:0};
+    const d=b.worst-a.worst;
+    const dCol=Math.abs(d)<0.5?"var(--muted)":d>0?"var(--green)":"var(--red)";
+    const sign=d>0?"+":"";
+    return `<tr>
+      <td style="color:${z.color}">${escapeHtml(z.name)}</td>
+      <td style="text-align:right;color:${coverColor(a.worst)}">${a.total?a.worst.toFixed(0):"—"}%</td>
+      <td style="text-align:right;color:${coverColor(b.worst)}">${b.total?b.worst.toFixed(0):"—"}%</td>
+      <td style="text-align:right;color:${dCol};font-weight:600">${a.total?sign+d.toFixed(0):"—"}</td>
+      <td style="text-align:right;color:var(--muted)">${a.total?a.mean.toFixed(0):"—"} / ${b.total?b.mean.toFixed(0):"—"}</td>
+    </tr>`; }).join("");
+  const sA=coverageScore(mA), sB=coverageScore(mB), sd=sB-sA;
+  const sdCol=Math.abs(sd)<0.5?"var(--muted)":sd>0?"var(--green)":"var(--red)";
+  const verdict = sd>0.5?`Config B is better by ${sd.toFixed(0)} pts (weighted worst-case).`
+    : sd<-0.5?`Config A is better by ${(-sd).toFixed(0)} pts (weighted worst-case).`
+    : "A and B are effectively tied.";
+  $("cmpResult").innerHTML=`
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">
+      <thead><tr style="color:var(--muted)">
+        <th style="text-align:left">Zone</th>
+        <th style="text-align:right">A worst</th>
+        <th style="text-align:right">B worst</th>
+        <th style="text-align:right">Δ (B−A)</th>
+        <th style="text-align:right">mean A/B</th></tr></thead>
+      <tbody>${rows}
+        <tr style="border-top:1px solid var(--line);font-weight:600">
+          <td>Weighted score</td>
+          <td style="text-align:right">${sA.toFixed(0)}</td>
+          <td style="text-align:right">${sB.toFixed(0)}</td>
+          <td style="text-align:right;color:${sdCol}">${(sd>0?"+":"")+sd.toFixed(0)}</td>
+          <td></td></tr>
+      </tbody>
+    </table>
+    <p class="mini" style="margin:8px 0 4px;color:var(--ink)"><b>${verdict}</b></p>
+    <label class="mini" style="display:flex;align-items:center;gap:5px">
+      <input type="checkbox" id="cmpOverlayCb" ${compareOverlayOn?"checked":""}
+        onchange="compareOverlayOn=this.checked;render()">
+      Overlay A (dashed) vs B (solid) FOVs on the Front view</label>
+    <p class="mini" style="color:var(--muted)">Worst = lowest coverage across all door
+      positions (the safety-relevant figure). Δ &gt; 0 means B covers more.</p>`;
+}
+// Draw both compared layouts' active FOVs at the current door position (front view).
+function drawCompareOverlay(){
+  if(!compareOverlayOn || curPlane!=="front" || !compareData.A || !compareData.B) return;
+  const side=project.project.doorSide;
+  const od=doorAngleForPercent(project.view.doorPct,project.door,side);
+  const paint=(cfg,stroke,dash)=>{
+    ctx.save(); ctx.setLineDash(dash); ctx.strokeStyle=stroke; ctx.lineWidth=1.6;
+    cfg.sensors.filter(s=>s.active && s.showFov!==false).forEach(s=>{
+      const poly=sensorFovProject(s,cfg.door,od,side,"front");
+      if(poly.length>=3){ polyPath(poly); ctx.stroke(); } });
+    ctx.restore();
+  };
+  paint(compareData.A, "#e3b341", [6,4]); // A dashed amber
+  paint(compareData.B, "#4da3ff", []);    // B solid blue
+  // legend
+  const lx=14, ly=H-40;
+  ctx.font="11px sans-serif"; ctx.textAlign="left";
+  ctx.strokeStyle="#e3b341"; ctx.setLineDash([6,4]); ctx.lineWidth=1.6;
+  ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(lx+22,ly); ctx.stroke();
+  ctx.setLineDash([]); ctx.fillStyle=cssVar("--ink"); ctx.fillText("Config A", lx+28, ly+4);
+  ctx.strokeStyle="#4da3ff"; ctx.beginPath(); ctx.moveTo(lx,ly+16); ctx.lineTo(lx+22,ly+16); ctx.stroke();
+  ctx.fillText("Config B", lx+28, ly+20);
+}
+
 /* ====================== 6. IMPORT / EXPORT ====================== */
 function download(name,content,type){
   const blob=new Blob([content],{type:type||"text/plain"});
@@ -2955,6 +3343,12 @@ function normalizeLoaded(data){
     { id:"R"+(i+1), name:"Region "+(i+1), color:REGION_PALETTE[i%REGION_PALETTE.length],
       points:[], fill:true, opacity:0.25, visible:true },
     r, { points:Array.isArray(r&&r.points)?r.points:[] })) : [];
+  // Coverage zones: backfill per-zone defaults; fall back to defaults if absent.
+  pj.zones = Array.isArray(data.zones) && data.zones.length
+    ? data.zones.map((z,i)=>Object.assign(
+        { id:"Z"+(i+1), name:"Zone "+(i+1), color:ZONE_PALETTE[i%ZONE_PALETTE.length],
+          yNear:0, yFar:1500, zLow:0, zHigh:1500, visible:true, weight:1 }, z))
+    : defaultZones();
   pj.view = Object.assign(defaultProject().view, data.view||{});
   if(!["front","top","split","3d"].includes(pj.view.plane))
     pj.view.plane="front";
@@ -3270,7 +3664,7 @@ function bindToolbar(){
     const pct=Math.max(0,Math.min(100, Math.abs(ang)/maxDeg*100));
     setDoorPct(pct);
   });
-  ["showSwept","showGhost","showMeasured","showTpIds"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
+  ["showSwept","showGhost","showMeasured","showTpIds","showZones"].forEach(id=>$(id).addEventListener("change",()=>{recomputeAll();render();}));
   $("viewPlane").addEventListener("change",()=>setViewPlane($("viewPlane").value));
 }
 
