@@ -186,6 +186,7 @@ a.dl{color:var(--accent)}
       <span class="tabgroup-label">Coverage</span>
       <button data-tab="zones">Zones</button>
       <button data-tab="compare">Compare</button>
+      <button data-tab="optimize">Optimize</button>
     </div>
     <div class="panels">
 
@@ -402,11 +403,21 @@ a.dl{color:var(--accent)}
           <b>mean</b> is the average over the travel. Turn on <b>Coverage zones</b>
           in the toolbar overlays to see covered (green) vs gap (red) samples — on
           the Front view, the Top view, and in 3D.</p>
-        <div class="row" style="align-items:center;margin-bottom:8px">
-          <label style="font-size:11px;flex:1">Grid step (mm)
-            <input id="z_grid" type="number" min="20" step="10" style="width:70px;font-size:11px">
-          </label>
-          <button onclick="recomputeCoverage()" style="font-size:11px">Recompute</button>
+        <div class="group" style="margin-bottom:12px">
+          <span class="group-cap">Placement &amp; grid</span>
+          <div class="row" style="align-items:flex-end">
+            <div class="field"><label>Front zones — fore-aft X (mm)</label>
+              <input id="z_frontX" type="number" step="50"
+                title="Moves every Front zone slab together along X"></div>
+            <div class="field"><label>Top zones — floor Z (mm)</label>
+              <input id="z_topZ" type="number" step="50"
+                title="Height of every Top zone slab above the floor"></div>
+          </div>
+          <div class="row" style="align-items:flex-end">
+            <div class="field" style="max-width:110px"><label>Grid step (mm)</label>
+              <input id="z_grid" type="number" min="20" step="10"></div>
+            <button onclick="recomputeCoverage()" style="font-size:11px;margin-bottom:9px">Recompute</button>
+          </div>
         </div>
         <div id="zoneList"></div>
         <p class="mini" style="color:var(--muted);margin-top:4px">Distances are outboard
@@ -440,6 +451,59 @@ a.dl{color:var(--accent)}
         </div>
         <p class="mini" id="cmpStatus" style="min-height:14px;color:var(--accent)"></p>
         <div id="cmpResult"></div>
+      </div>
+
+      <!-- Optimize sensor placement / aiming -->
+      <div class="panel" data-tab="optimize">
+        <h2>Optimize Sensors</h2>
+        <p class="hint">Searches the active sensors to <b>maximise</b> worst-case
+          coverage of <b>Include</b> zones while <b>minimising</b> intrusion into
+          <b>Exclude</b> zones (weighted). Set each zone's role in the Zones tab.
+          The search runs on a coarser grid for speed; the final result is re-scored
+          at your normal grid.</p>
+        <div class="group">
+          <span class="group-cap">What to search</span>
+          <div class="field"><label>Mode</label>
+            <select id="opt_mode">
+              <option value="angles">Angles only — keep positions, tune yaw/pitch</option>
+              <option value="full">Positions + angles — also move mounting</option>
+            </select></div>
+          <div class="row">
+            <div class="field"><label>Yaw step (°)</label><input id="opt_yawStep" type="number" value="15" min="2" step="1"></div>
+            <div class="field"><label>Pitch range ±(°)</label><input id="opt_pitchMax" type="number" value="30" min="0" step="5"></div>
+            <div class="field"><label>Pitch step (°)</label><input id="opt_pitchStep" type="number" value="10" min="1" step="1"></div>
+          </div>
+          <div id="opt_boundsBox" style="display:none">
+            <p class="mini" style="color:var(--muted);margin:2px 0">Mounting bounds (door-local mm) and step:</p>
+            <div class="row">
+              <div class="field"><label>posY min</label><input id="opt_yMin" type="number"></div>
+              <div class="field"><label>posY max</label><input id="opt_yMax" type="number"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label>posZ min</label><input id="opt_zMin" type="number"></div>
+              <div class="field"><label>posZ max</label><input id="opt_zMax" type="number"></div>
+              <div class="field" style="max-width:80px"><label>step</label><input id="opt_posStep" type="number" value="100" min="20"></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field" style="max-width:120px"><label>Search grid (mm)</label><input id="opt_grid" type="number" value="120" min="40" step="10"></div>
+            <label class="mini" style="display:flex;align-items:flex-end;gap:5px;padding-bottom:10px">
+              <input type="checkbox" id="opt_fast" checked> Fast (fewer door positions)</label>
+          </div>
+        </div>
+        <div class="row" style="align-items:center">
+          <button class="primary" id="opt_runBtn" onclick="runOptimize()" style="flex:1">Run optimize</button>
+          <button id="opt_cancelBtn" onclick="optCancel=true" style="display:none">Cancel</button>
+          <button id="opt_applyBtn" onclick="applyOptimize()" style="display:none">Apply best</button>
+        </div>
+        <div id="opt_progWrap" style="display:none;margin-top:8px">
+          <div style="height:6px;background:var(--panel2);border-radius:3px;overflow:hidden">
+            <div id="opt_progBar" style="height:100%;width:0;background:var(--accent);transition:width .1s"></div>
+          </div>
+          <p class="mini" id="opt_progText" style="color:var(--muted);margin:4px 0 0"></p>
+        </div>
+        <p class="mini" id="opt_status" style="min-height:14px;color:var(--accent)"></p>
+        <div id="opt_result"></div>
       </div>
 
     </div>
@@ -611,23 +675,24 @@ function wingDefaultProfile(){
 const ZONE_PALETTE=["#e3b341","#4da3ff","#a371f7","#39d353","#ff9800"];
 function defaultZones(){
   return [
-    { id:"Z_ground", name:"Ground", plane:"front", color:"#e3b341",
+    { id:"Z_ground", name:"Ground", plane:"front", role:"include", color:"#e3b341",
       yNear:0,    yFar:1600, zLow:0,   zHigh:300,  xAt:0, visible:true, weight:1 },
-    { id:"Z_close",  name:"Close zone", plane:"front", color:"#f85149",
+    { id:"Z_close",  name:"Close zone", plane:"front", role:"include", color:"#f85149",
       yNear:900,  yFar:1500, zLow:200, zHigh:1600, xAt:0, visible:true, weight:2 },
-    { id:"Z_near",   name:"Near zone", plane:"front", color:"#4da3ff",
+    { id:"Z_near",   name:"Near zone", plane:"front", role:"include", color:"#4da3ff",
       yNear:1500, yFar:2500, zLow:200, zHigh:1600, xAt:0, visible:true, weight:1 },
-    { id:"Z_floor",  name:"Floor footprint", plane:"top", color:"#a371f7",
-      yNear:0,    yFar:2000, xNear:-1000, xFar:1000, visible:true, weight:1 },
+    { id:"Z_floor",  name:"Floor footprint", plane:"top", role:"include", color:"#a371f7",
+      yNear:0,    yFar:2000, xNear:-1000, xFar:1000, zAt:0, visible:true, weight:1 },
   ];
 }
 // Backfill any missing fields so older/partial zones stay valid.
 function normalizeZone(z, i){
-  const base={ id:"Z"+(i+1), name:"Zone "+(i+1), plane:"front",
+  const base={ id:"Z"+(i+1), name:"Zone "+(i+1), plane:"front", role:"include",
     color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500,
-    zLow:0, zHigh:1500, xAt:0, xNear:-1000, xFar:1000, visible:true, weight:1 };
+    zLow:0, zHigh:1500, xAt:0, xNear:-1000, xFar:1000, zAt:0, visible:true, weight:1 };
   const out=Object.assign(base, z);
   out.plane = out.plane==="top" ? "top" : "front";
+  if(!["include","exclude","none"].includes(out.role)) out.role="include";
   return out;
 }
 // Four corners of a zone in its OWN plane's 2D coords: front→{x:Y,y:Z},
@@ -654,11 +719,12 @@ function zonePolygon(zone, side){
 function zoneWorldCorners(zone, side){
   const so = side==="RH" ? 1 : -1;
   if(zone.plane==="top"){
+    const z=zone.zAt||0;
     return [
-      { x:zone.xNear, y:so*zone.yNear, z:0 },
-      { x:zone.xFar,  y:so*zone.yNear, z:0 },
-      { x:zone.xFar,  y:so*zone.yFar,  z:0 },
-      { x:zone.xNear, y:so*zone.yFar,  z:0 },
+      { x:zone.xNear, y:so*zone.yNear, z },
+      { x:zone.xFar,  y:so*zone.yNear, z },
+      { x:zone.xFar,  y:so*zone.yFar,  z },
+      { x:zone.xNear, y:so*zone.yFar,  z },
     ];
   }
   const x=zone.xAt||0;
@@ -1109,21 +1175,51 @@ function computeConfigMetrics(cfg){
   });
 }
 
-/* ---- Coverage zones: per-zone % covered by the union of active FOVs ----
-   Coverage is evaluated in the FRONT (Y-Z) plane — the plane the door lifts in.
-   A fixed zone band is sampled on a grid; a sample counts as covered at a given
-   door position when it falls inside ANY active sensor's projected FOV polygon.
-   Because the sensors ride the door, coverage is computed at every door position
-   and reported as worst-case (the safety-relevant figure), mean, and a curve.
+/* ---- Coverage zones: true 3D voxel test against the sensor FOV volumes ----
+   Each zone is a planar rectangle placed in 3D (front = vertical slab at X=xAt,
+   top = horizontal slab at Z=zAt). It is sampled on a grid of world points; a
+   point counts as covered at a door position when it lies inside ANY active
+   sensor's 3D FOV volume (elliptical spherical sector). Because the sensors ride
+   the door, coverage is computed at every door position and reported as worst
+   (the safety-relevant min), best (max), mean, and the per-position curve.
    Pure: it swaps `project` via withProject so any cfg is measured identically. */
-function zoneSamplePoints(zone, side, gridMm){
-  const poly=zonePolygon(zone, side);
-  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
-  poly.forEach(p=>{minx=Math.min(minx,p.x);maxx=Math.max(maxx,p.x);
-    miny=Math.min(miny,p.y);maxy=Math.max(maxy,p.y);});
-  const step=Math.max(20, gridMm||60), pts=[];
-  for(let x=minx;x<=maxx+1e-6;x+=step) for(let y=miny;y<=maxy+1e-6;y+=step)
-    if(pointInPolygon({x,y},poly)) pts.push({x,y});
+// Orthonormal beam frame for a sensor at a door position — mirrors the geometry
+// in sensorConeGeom so the point test matches the drawn cone exactly.
+function sensorFovFrame(s, door, openDeg, side){
+  const pose=sensorPoseAtAngle(s, door, openDeg, side);
+  const apex={x:door.hingeX+s.posX, y:pose.x, z:pose.y};
+  const f=pose.facing, p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
+  const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];   // beam axis
+  const hx=[cp, -Math.cos(f)*sp, -Math.sin(f)*sp]; // horizontal spread
+  const vx=[0, -Math.sin(f), Math.cos(f)];         // vertical spread
+  const maxR=Math.max(1,s.maxRangeMm||1), minR=Math.max(0,Math.min(s.minRangeMm||0,maxR));
+  return { apex, ax, hx, vx,
+    th:Math.tan(deg2rad((s.hFovDeg||1)/2))||1e-6,
+    tv:Math.tan(deg2rad((s.vFovDeg||1)/2))||1e-6, minR, maxR };
+}
+// Is world point P inside the sensor's FOV volume described by frame fr?
+function pointInSensorFov3D(P, fr){
+  const wx=P.x-fr.apex.x, wy=P.y-fr.apex.y, wz=P.z-fr.apex.z;
+  const R=Math.hypot(wx,wy,wz);
+  if(R<fr.minR || R>fr.maxR) return false;
+  const dx=wx/R, dy=wy/R, dz=wz/R;
+  const a=dx*fr.ax[0]+dy*fr.ax[1]+dz*fr.ax[2];
+  if(a<=1e-6) return false;                         // behind the sensor
+  const u=(dx*fr.hx[0]+dy*fr.hx[1]+dz*fr.hx[2])/(a*fr.th);
+  const v=(dx*fr.vx[0]+dy*fr.vx[1]+dz*fr.vx[2])/(a*fr.tv);
+  return u*u+v*v<=1;                                // inside the elliptical cone
+}
+// Grid of world sample points {x,y,z} on a zone's plane.
+function zoneWorldSamples(zone, side, gridMm){
+  const so=side==="RH"?1:-1, step=Math.max(20,gridMm||60), pts=[];
+  const rng=(a,b)=>[Math.min(a,b),Math.max(a,b)];
+  if(zone.plane==="top"){
+    const z=zone.zAt||0, [x0,x1]=rng(zone.xNear,zone.xFar), [y0,y1]=rng(zone.yNear,zone.yFar);
+    for(let x=x0;x<=x1+1e-6;x+=step) for(let y=y0;y<=y1+1e-6;y+=step) pts.push({x,y:so*y,z});
+  } else {
+    const x=zone.xAt||0, [y0,y1]=rng(zone.yNear,zone.yFar), [z0,z1]=rng(zone.zLow,zone.zHigh);
+    for(let y=y0;y<=y1+1e-6;y+=step) for(let z=z0;z<=z1+1e-6;z+=step) pts.push({x,y:so*y,z});
+  }
   return pts;
 }
 function coverageMetrics(cfg, opts){
@@ -1135,34 +1231,44 @@ function coverageMetrics(cfg, opts){
       ? opts.positions : (cfg.door.positionsPct || [0,50,100]);
     const gridMm=Math.max(20, opts.gridMm || (cfg.overlap&&cfg.overlap.gridMm) || 60);
     const activeSensors=cfg.sensors.filter(s=>s.active && s.showFov!==false);
+    // Precompute the sensor frames once per door position (reused across zones).
+    const frames={};
+    for(const pct of positions){ const od=doorAngleForPercent(pct,cfg.door,side);
+      frames[pct]=activeSensors.map(s=>sensorFovFrame(s,cfg.door,od,side)); }
     const out={};
     for(const z of zones){
-      const plane = z.plane==="top" ? "top" : "front";
-      const samples=zoneSamplePoints(z, side, gridMm);
+      const samples=zoneWorldSamples(z, side, gridMm);
       const total=samples.length, perPos=[];
       let sum=0, worst=total?101:0, best=0;
       for(const pct of positions){
-        const od=doorAngleForPercent(pct,cfg.door,side);
-        const fovs=activeSensors.map(s=>sensorFovProject(s,cfg.door,od,side,plane));
-        let covered=0;
-        for(const pt of samples)
-          if(fovs.some(f=>f.length>=3 && pointInPolygon(pt,f))) covered++;
+        const frs=frames[pct]; let covered=0;
+        for(const P of samples) if(frs.some(fr=>pointInSensorFov3D(P,fr))) covered++;
         const cov=total? covered/total*100 : 0;
         perPos.push({pct, cov});
         sum+=cov; worst=Math.min(worst,cov); best=Math.max(best,cov);
       }
       out[z.id]={ id:z.id, name:z.name, color:z.color, weight:z.weight||1,
-        total, gridMm, worst: total?worst:0, best,
+        role:z.role||"include", plane:z.plane, total, gridMm, worst: total?worst:0, best,
         mean: positions.length? sum/positions.length : 0, perPos };
     }
     return out;
   });
 }
-// Weighted overall score (worst-case, zone weights) — used by Compare/Optimize.
+// Weighted worst-case coverage across INCLUDE zones (Compare headline / display).
 function coverageScore(metrics){
   let wsum=0, acc=0;
-  for(const k in metrics){ const m=metrics[k], w=m.weight||1; wsum+=w; acc+=w*m.worst; }
+  for(const k in metrics){ const m=metrics[k]; if(m.role==="exclude"||m.role==="none") continue;
+    const w=m.weight||1; wsum+=w; acc+=w*m.worst; }
   return wsum? acc/wsum : 0;
+}
+// Optimizer objective: reward INCLUDE worst-case coverage, penalise the peak
+// intrusion into EXCLUDE zones (their best = max coverage across door positions).
+function optimizeObjective(metrics){
+  let inc=0, exc=0;
+  for(const k in metrics){ const m=metrics[k], w=m.weight||1;
+    if(m.role==="exclude") exc += w*m.best;
+    else if(m.role!=="none") inc += w*m.worst; }
+  return inc - exc;
 }
 
 /* ====================== 4. RENDERING ======================
@@ -2299,9 +2405,10 @@ function drawZones(){
   if((curPlane!=="front" && curPlane!=="top") || !$("showZones") || !$("showZones").checked || !project.zones) return;
   const side=project.project.doorSide;
   const od=doorAngleForPercent(project.view.doorPct,project.door,side);
-  const fovs=project.sensors.filter(s=>s.active && s.showFov!==false)
-    .map(s=>sensorFovProject(s,project.door,od,side,curPlane));
+  const frames=project.sensors.filter(s=>s.active && s.showFov!==false)
+    .map(s=>sensorFovFrame(s,project.door,od,side));
   const gridMm=Math.max(20,(project.overlap&&project.overlap.gridMm)||60);
+  const toPlane2 = curPlane==="top" ? (P=>({x:P.x,y:P.y})) : (P=>({x:P.y,y:P.z}));
   for(const z of project.zones){
     if(!z.visible || (z.plane==="top"?"top":"front")!==curPlane) continue;
     const poly=zonePolygon(z, side);
@@ -2309,19 +2416,20 @@ function drawZones(){
     ctx.fillStyle=hexToRgba(z.color,0.06); ctx.fill();
     ctx.save(); ctx.setLineDash([6,4]);
     ctx.strokeStyle=z.color; ctx.lineWidth=1.5; ctx.stroke(); ctx.restore();
-    const samples=zoneSamplePoints(z, side, gridMm);
+    const samples=zoneWorldSamples(z, side, gridMm);
     let covered=0;
-    for(const pt of samples){
-      const inFov=fovs.some(f=>f.length>=3 && pointInPolygon(pt,f));
+    for(const P of samples){
+      const inFov=frames.some(fr=>pointInSensorFov3D(P,fr));
       if(inFov) covered++;
-      const q=worldToScreen(pt);
+      const q=worldToScreen(toPlane2(P));
       ctx.fillStyle= inFov ? "rgba(57,211,83,.55)" : "rgba(248,81,73,.5)";
       ctx.beginPath(); ctx.arc(q.x,q.y,1.6,0,7); ctx.fill();
     }
     const cov=samples.length? Math.round(covered/samples.length*100):0;
-    const lp=worldToScreen(poly[3]); // (yNear, zHigh) — top inner corner
+    const tag = z.role==="exclude" ? " ⊘" : z.role==="include" ? " ✓" : "";
+    const lp=worldToScreen(poly[3]); // top inner corner
     ctx.fillStyle=z.color; ctx.font="11px sans-serif"; ctx.textAlign="left";
-    ctx.fillText(`${z.name}  ${cov}%`, lp.x+4, lp.y-4);
+    ctx.fillText(`${z.name}${tag}  ${cov}%`, lp.x+4, lp.y-4);
   }
 }
 // The top-view pane canvas (right pane in split, else the single pane).
@@ -2391,6 +2499,7 @@ function bindTabs(){
       coverageCache=null; renderZonePanel(); render();
     }
     if(b.dataset.tab==="compare") renderComparePanel();
+    if(b.dataset.tab==="optimize") renderOptimizePanel();
   });
 }
 // Re-render panels whose numbers depend on the current door position.
@@ -3214,18 +3323,32 @@ function updateZoneStats(){
 function addZone(plane){
   plane = plane==="top" ? "top" : "front";
   const i=project.zones.length;
+  // inherit the shared placement so a new slab lands with the others
+  const frontX=firstZoneVal("front","xAt",0), topZ=firstZoneVal("top","zAt",0);
   const base={ id:"Z"+Date.now().toString(36), name:(plane==="top"?"Top":"Front")+" zone "+(i+1),
-    plane, color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500,
-    zLow:0, zHigh:1500, xAt:0, xNear:-1000, xFar:1000, visible:true, weight:1 };
+    plane, role:"include", color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500,
+    zLow:0, zHigh:1500, xAt:frontX, xNear:-1000, xFar:1000, zAt:topZ, visible:true, weight:1 };
   project.zones.push(base);
   coverageCache=null; renderZonePanel(); render();
 }
+// Common placement value across zones of a plane (for the shared controls).
+function firstZoneVal(plane, key, dflt){
+  const z=(project.zones||[]).find(z=>(z.plane==="top"?"top":"front")===plane);
+  return z && z[key]!=null ? z[key] : dflt;
+}
+function setPlaneX(v){ project.zones.forEach(z=>{ if(z.plane!=="top") z.xAt=v; });
+  coverageCache=null; updateZoneStats(); render(); }
+function setPlaneZ(v){ project.zones.forEach(z=>{ if(z.plane==="top") z.zAt=v; });
+  coverageCache=null; updateZoneStats(); render(); }
 function renderZonePanel(){
   const g=$("z_grid"); if(g && document.activeElement!==g)
     g.value=(project.overlap&&project.overlap.gridMm)||60;
+  const fx=$("z_frontX"); if(fx && document.activeElement!==fx) fx.value=firstZoneVal("front","xAt",0);
+  const tz=$("z_topZ");   if(tz && document.activeElement!==tz) tz.value=firstZoneVal("top","zAt",0);
+  if(fx && !fx._bound){ fx._bound=1; fx.addEventListener("input",()=>setPlaneX(parseFloat(fx.value)||0)); }
+  if(tz && !tz._bound){ tz._bound=1; tz.addEventListener("input",()=>setPlaneZ(parseFloat(tz.value)||0)); }
   const host=$("zoneList"); if(!host) return; host.innerHTML="";
   project.zones.forEach((z,idx)=>{
-    // geometry rows depend on the plane
     const geoRows = z.plane==="top"
       ? `<div class="row">
            <div class="field"><label>Fore-aft near X (mm)</label><input data-zk="xNear" type="number" value="${z.xNear}"></div>
@@ -3234,9 +3357,7 @@ function renderZonePanel(){
          <div class="row" style="align-items:flex-end">
            <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
            <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
-           <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
-         </div>
-         <p class="mini" style="color:var(--muted);margin:0 0 4px">Flat on the floor (Z=0).</p>`
+         </div>`
       : `<div class="row">
            <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
            <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
@@ -3244,46 +3365,61 @@ function renderZonePanel(){
          <div class="row" style="align-items:flex-end">
            <div class="field"><label>Z low (mm)</label><input data-zk="zLow" type="number" value="${z.zLow}"></div>
            <div class="field"><label>Z high (mm)</label><input data-zk="zHigh" type="number" value="${z.zHigh}"></div>
-           <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
-         </div>
-         <div class="row"><div class="field"><label>Fore-aft position X (mm) — 3D placement</label>
-           <input data-zk="xAt" type="number" value="${z.xAt||0}"></div></div>`;
+         </div>`;
+    const roleColor = z.role==="exclude"?"var(--red)":z.role==="none"?"var(--muted)":"var(--green)";
     const div=document.createElement("div"); div.className="group";
+    if(!z.visible) div.style.opacity="0.55";
     div.innerHTML=`
       <span class="group-cap" style="color:${z.color}">${escapeHtml(z.name)}</span>
       <div class="row" style="align-items:center;margin-bottom:6px">
-        <label class="mini" style="display:flex;align-items:center;gap:4px">
-          <input type="checkbox" data-zk="visible" ${z.visible?"checked":""}> show</label>
+        <button data-zvis="1" title="Show / hide this zone"
+          style="font-size:14px;line-height:1;padding:2px 6px;border-radius:6px">${z.visible?"👁":"🚫"}</button>
+        <span data-zk="roletag" style="font-size:9px;font-weight:600;text-transform:uppercase;
+          letter-spacing:.05em;color:${roleColor}">${z.role}</span>
         <span style="flex:1"></span>
         <span class="mini" id="zstat_${z.id}"></span>
       </div>
       <div class="row">
         <div class="field"><label>Name</label><input data-zk="name" value="${escapeHtml(z.name)}"></div>
-        <div class="field" style="max-width:88px"><label>Plane</label>
+        <div class="field" style="max-width:96px"><label>Plane</label>
           <select data-zk="plane">
             <option value="front" ${z.plane!=="top"?"selected":""}>Front (Y–Z)</option>
             <option value="top" ${z.plane==="top"?"selected":""}>Top (X–Y)</option>
           </select></div>
       </div>
       <div class="row">
-        <div class="field" style="max-width:80px"><label>Weight</label>
+        <div class="field"><label>Role (optimize)</label>
+          <select data-zk="role">
+            <option value="include" ${z.role==="include"?"selected":""}>Include — maximise</option>
+            <option value="exclude" ${z.role==="exclude"?"selected":""}>Exclude — avoid</option>
+            <option value="none" ${z.role==="none"?"selected":""}>Ignore</option>
+          </select></div>
+        <div class="field" style="max-width:72px"><label>Weight</label>
           <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
-        <div class="field" style="max-width:52px"><label>Colour</label>
+        <div class="field" style="max-width:48px"><label>Colour</label>
           <input data-zk="color" type="color" value="${z.color}" style="padding:1px;height:28px"></div>
       </div>
-      ${geoRows}`;
+      ${geoRows}
+      <div class="row" style="justify-content:flex-end;margin-top:2px">
+        <button data-zdel="1" style="font-size:10px;padding:3px 10px">Delete</button>
+      </div>`;
     div.querySelectorAll("[data-zk]").forEach(inp=>{
-      const k=inp.dataset.zk;
-      const ev=(inp.type==="checkbox"||inp.type==="color"||inp.tagName==="SELECT")?"change":"input";
+      const k=inp.dataset.zk; if(k==="roletag") return;
+      const ev=(inp.type==="color"||inp.tagName==="SELECT")?"change":"input";
       inp.addEventListener(ev,()=>{
-        if(k==="visible") z.visible=inp.checked;
-        else if(k==="plane"){ z.plane=inp.value; coverageCache=null; renderZonePanel(); render(); return; }
+        if(k==="plane"){ z.plane=inp.value;
+          if(z.plane!=="top") z.xAt=firstZoneVal("front","xAt",0); else z.zAt=firstZoneVal("top","zAt",0);
+          coverageCache=null; renderZonePanel(); render(); return; }
+        else if(k==="role"){ z.role=inp.value; coverageCache=null; renderZonePanel(); render(); return; }
         else if(k==="name"||k==="color"){ z[k]=inp.value;
           if(k==="color"){ const cap=div.querySelector(".group-cap");
             if(cap) cap.style.color=inp.value; } }
         else z[k]=parseFloat(inp.value)||0;
         coverageCache=null; updateZoneStats(); render();
       });
+    });
+    div.querySelector("[data-zvis]").addEventListener("click",()=>{
+      z.visible=!z.visible; renderZonePanel(); render();
     });
     div.querySelector("[data-zdel]").addEventListener("click",()=>{
       project.zones.splice(idx,1); coverageCache=null; renderZonePanel(); render();
@@ -3423,6 +3559,137 @@ function drawCompareOverlay(){
   ctx.setLineDash([]); ctx.fillStyle=cssVar("--ink"); ctx.fillText("Config A", lx+28, ly+4);
   ctx.strokeStyle="#4da3ff"; ctx.beginPath(); ctx.moveTo(lx,ly+16); ctx.lineTo(lx+22,ly+16); ctx.stroke();
   ctx.fillText("Config B", lx+28, ly+20);
+}
+
+/* ====================== 5d. OPTIMIZE SENSORS ======================
+   Coordinate-descent search over each active sensor's aim (yaw/pitch) and, in
+   full mode, its mounting (posY/posZ). Every candidate is scored by cloning the
+   project and running coverageMetrics through the shared optimizeObjective, so
+   the optimizer maximises exactly what Compare/Zones report. Runs async, yielding
+   to the UI between variable sweeps so the progress bar animates and Cancel works. */
+let optCancel=false, optState=null;
+const optTick=()=>new Promise(r=>setTimeout(r,0));
+function optRange(a,b,step){ const out=[]; if(!(step>0)) return [a];
+  for(let v=a; v<=b+1e-9; v+=step) out.push(Math.round(v*100)/100); return out; }
+function renderOptimizePanel(){
+  const box=$("opt_boundsBox"), mode=$("opt_mode");
+  if(mode && !mode._bound){ mode._bound=1;
+    mode.addEventListener("change",()=>{ box.style.display=mode.value==="full"?"block":"none"; }); }
+  if(box && mode) box.style.display=mode.value==="full"?"block":"none";
+  const prof=project.door.profile||[];
+  let ymin=Infinity,ymax=-Infinity,zmin=Infinity,zmax=-Infinity;
+  prof.forEach(p=>{ymin=Math.min(ymin,p.y);ymax=Math.max(ymax,p.y);
+    zmin=Math.min(zmin,p.z);zmax=Math.max(zmax,p.z);});
+  if(!isFinite(ymin)){ ymin=-1010; ymax=0; zmin=-1240; zmax=0; }
+  const setIf=(id,v)=>{ const el=$(id); if(el && el.value==="") el.value=Math.round(v); };
+  setIf("opt_yMin",ymin); setIf("opt_yMax",ymax); setIf("opt_zMin",zmin); setIf("opt_zMax",zmax);
+}
+async function runOptimize(){
+  const st=$("opt_status");
+  if(!project.zones || !project.zones.some(z=>z.role==="include")){
+    st.style.color="var(--red)"; st.textContent="Add at least one Include zone (Zones tab) first."; return; }
+  const num=(id,d)=>{ const v=parseFloat($(id).value); return isFinite(v)?v:d; };
+  const mode=$("opt_mode").value;
+  const yawStep=Math.max(2,num("opt_yawStep",15));
+  const pitchMax=Math.max(0,num("opt_pitchMax",30));
+  const pitchStep=Math.max(1,num("opt_pitchStep",10));
+  const grid=Math.max(40,num("opt_grid",120));
+  const fast=$("opt_fast").checked;
+  const positions = fast ? [0,25,50,75,100] : (project.door.positionsPct||[0,50,100]);
+  const opts={ zones:project.zones, gridMm:grid, positions };
+  const work=normalizeLoaded(JSON.parse(JSON.stringify(project)));
+  const idxs=work.sensors.map((s,i)=>i).filter(i=>work.sensors[i].active && work.sensors[i].showFov!==false);
+  if(!idxs.length){ st.style.color="var(--red)"; st.textContent="No active sensors to optimize."; return; }
+  const yaws=optRange(0,360-1e-6,yawStep);
+  const pitches = pitchMax>0 ? optRange(-pitchMax,pitchMax,pitchStep) : [0];
+  let posYs=[null], posZs=[null];
+  if(mode==="full"){
+    const posStep=Math.max(20,num("opt_posStep",100));
+    posYs=optRange(num("opt_yMin",-1010),num("opt_yMax",0),posStep);
+    posZs=optRange(num("opt_zMin",-1240),num("opt_zMax",0),posStep);
+  }
+  const vars = mode==="full" ? ["posY","posZ","yaw","pitch"] : ["yaw","pitch"];
+  const keyOf={posY:"posY",posZ:"posZ",yaw:"yawDeg",pitch:"pitchDeg"};
+  const candOf={posY:posYs,posZ:posZs,yaw:yaws,pitch:pitches};
+  const passes=2, totalSteps=passes*idxs.length*vars.length;
+  // UI: running
+  optCancel=false; optState=null;
+  $("opt_runBtn").disabled=true; $("opt_cancelBtn").style.display="";
+  $("opt_applyBtn").style.display="none"; $("opt_progWrap").style.display="";
+  $("opt_result").innerHTML=""; st.style.color="var(--accent)"; st.textContent="Searching…";
+  const evalObj=cfg=>optimizeObjective(coverageMetrics(cfg,opts));
+  let bestObj=evalObj(work), step=0;
+  for(let pass=0; pass<passes && !optCancel; pass++){
+    for(const si of idxs){ if(optCancel) break;
+      const s=work.sensors[si];
+      for(const v of vars){ if(optCancel) break;
+        const key=keyOf[v], cands=candOf[v];
+        let bestVal=s[key], bestLocal=bestObj;
+        for(const c of cands){ if(c==null) continue; s[key]=c;
+          const o=evalObj(work); if(o>bestLocal+1e-9){ bestLocal=o; bestVal=c; } }
+        s[key]=bestVal; bestObj=bestLocal;
+        step++;
+        $("opt_progBar").style.width=Math.round(step/totalSteps*100)+"%";
+        $("opt_progText").textContent=`pass ${pass+1}/${passes} · ${s.id} · ${v} · best objective ${bestObj.toFixed(1)}`;
+        await optTick();
+      }
+    }
+  }
+  // Re-score before/after at the project's normal grid + full positions.
+  const finalOpts={ zones:project.zones,
+    gridMm:(project.overlap&&project.overlap.gridMm)||60, positions:project.door.positionsPct };
+  const before=coverageMetrics(project,finalOpts), after=coverageMetrics(work,finalOpts);
+  optState={ work, before, after };
+  renderOptimizeResult(before, after, optimizeObjective(before), optimizeObjective(after));
+  $("opt_runBtn").disabled=false; $("opt_cancelBtn").style.display="none";
+  $("opt_progWrap").style.display="none"; $("opt_applyBtn").style.display="";
+  st.textContent = optCancel ? "Cancelled — best-so-far kept below." : "Done — review, then Apply best.";
+}
+function renderOptimizeResult(before, after, objB, objA){
+  const zoneRows=project.zones.filter(z=>z.role!=="none").map(z=>{
+    const a=before[z.id]||{}, b=after[z.id]||{};
+    const isExc=z.role==="exclude";
+    const mA=isExc?(a.best||0):(a.worst||0), mB=isExc?(b.best||0):(b.worst||0);
+    const d=mB-mA, better=isExc?d<0:d>0;
+    const col=Math.abs(d)<0.5?"var(--muted)":better?"var(--green)":"var(--red)";
+    return `<tr><td style="color:${z.color}">${escapeHtml(z.name)}
+        <span style="color:var(--muted);font-size:9px">${z.role} ${isExc?"peak":"worst"}</span></td>
+      <td style="text-align:right">${Math.round(mA)}%</td>
+      <td style="text-align:right">${Math.round(mB)}%</td>
+      <td style="text-align:right;color:${col};font-weight:600">${(d>0?"+":"")+Math.round(d)}</td></tr>`;
+  }).join("");
+  const sensRows=optState.work.sensors.filter(s=>s.active).map(s=>{
+    const o=project.sensors.find(x=>x.id===s.id)||{};
+    const chg=(k,u)=> Math.round(o[k])!==Math.round(s[k])
+      ? `<b style="color:var(--accent)">${Math.round(s[k])}${u}</b>` : `${Math.round(s[k])}${u}`;
+    return `<tr><td>${escapeHtml(s.id)}</td><td style="text-align:right">${chg('posY','')}</td>
+      <td style="text-align:right">${chg('posZ','')}</td><td style="text-align:right">${chg('yawDeg','°')}</td>
+      <td style="text-align:right">${chg('pitchDeg','°')}</td></tr>`;
+  }).join("");
+  const dObj=objA-objB;
+  $("opt_result").innerHTML=`
+    <p class="mini" style="margin:8px 0 2px"><b>Objective:</b> ${objB.toFixed(0)} →
+      <b style="color:${dObj>=0?'var(--green)':'var(--red)'}">${objA.toFixed(0)}</b>
+      (${(dObj>=0?"+":"")+dObj.toFixed(0)})</p>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px">
+      <thead><tr style="color:var(--muted)"><th style="text-align:left">Zone</th>
+        <th style="text-align:right">before</th><th style="text-align:right">after</th>
+        <th style="text-align:right">Δ</th></tr></thead>
+      <tbody>${zoneRows}</tbody></table>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">
+      <thead><tr style="color:var(--muted)"><th style="text-align:left">Sensor</th>
+        <th style="text-align:right">posY</th><th style="text-align:right">posZ</th>
+        <th style="text-align:right">yaw</th><th style="text-align:right">pitch</th></tr></thead>
+      <tbody>${sensRows}</tbody></table>
+    <p class="mini" style="color:var(--muted)">Bold = changed. <b>Apply best</b> loads these sensors into the project.</p>`;
+}
+function applyOptimize(){
+  if(!optState || !optState.work) return;
+  project.sensors=optState.work.sensors;
+  coverageCache=null;
+  renderSensorList(); recomputeAll(); renderZonePanel(); render();
+  $("opt_status").textContent="Applied — sensors updated. Re-run to refine further.";
+  $("opt_applyBtn").style.display="none";
 }
 
 /* ====================== 6. IMPORT / EXPORT ====================== */
