@@ -393,12 +393,15 @@ a.dl{color:var(--accent)}
       <!-- Coverage zones (front Y-Z plane) -->
       <div class="panel" data-tab="zones">
         <h2>Coverage Zones</h2>
-        <p class="hint">Zones are fixed bands in the <b>Front (Y–Z)</b> plane — they
-          stay put while the door lifts. Coverage = the share of a zone that falls
-          inside any active sensor's FOV. Because the sensors ride the door, it is
-          measured at every door position; <b>Worst</b> (the smallest across all
-          positions) is the safety-relevant figure. Turn on <b>Coverage zones</b>
-          in the toolbar overlays to see covered (green) vs gap (red) samples.</p>
+        <p class="hint">Zones are fixed rectangles that stay put while the door
+          lifts. A <b>Front</b> zone is a vertical band (Y×Z) at a fore-aft X; a
+          <b>Top</b> zone lies flat on the floor (X×Y at Z=0). Coverage = the share
+          of the zone inside any active sensor's FOV, measured on that zone's plane.
+          Because the sensors ride the door it is evaluated at every door position;
+          <b>Worst</b> (smallest across all positions) is the safety-relevant figure,
+          <b>mean</b> is the average over the travel. Turn on <b>Coverage zones</b>
+          in the toolbar overlays to see covered (green) vs gap (red) samples — on
+          the Front view, the Top view, and in 3D.</p>
         <div class="row" style="align-items:center;margin-bottom:8px">
           <label style="font-size:11px;flex:1">Grid step (mm)
             <input id="z_grid" type="number" min="20" step="10" style="width:70px;font-size:11px">
@@ -594,31 +597,76 @@ function wingDefaultProfile(){
     {y:-760, z:-80}     // back toward hinge (inner)
   ];
 }
-// Coverage zones live in the FRONT (Y-Z) plane and are fixed in the world (they
-// do NOT ride the door). Each is an axis-aligned band described by an outboard
-// distance range (yNear..yFar, mm from the vehicle side, always positive) and a
-// height range (zLow..zHigh, mm above ground). The outboard direction flips with
-// the door side, so the band is mirrored into plane coords at draw/measure time.
+// Coverage zones are axis-aligned rectangles fixed in the world (they do NOT
+// ride the door). Each belongs to a view plane:
+//   plane:"front" — a VERTICAL band in Y (outboard) × Z (height), placed at a
+//                   fore-aft position xAt (default 0, adjustable). Coverage is
+//                   measured against the front (Y-Z) FOV silhouette.
+//   plane:"top"   — a HORIZONTAL band in X (fore-aft) × Y (outboard) lying on
+//                   the floor (Z=0). Coverage is measured against the top (X-Y)
+//                   FOV footprint.
+// In both planes yNear..yFar is the outboard distance (mm from the vehicle side,
+// always positive); the outboard direction flips with the door side, so bands
+// are mirrored into plane coords at draw/measure time (−Y for LH, +Y for RH).
 const ZONE_PALETTE=["#e3b341","#4da3ff","#a371f7","#39d353","#ff9800"];
 function defaultZones(){
   return [
-    { id:"Z_ground", name:"Ground", color:"#e3b341",
-      yNear:0,    yFar:1600, zLow:0,   zHigh:300,  visible:true, weight:1 },
-    { id:"Z_close",  name:"Close zone", color:"#f85149",
-      yNear:900,  yFar:1500, zLow:200, zHigh:1600, visible:true, weight:2 },
-    { id:"Z_near",   name:"Near zone", color:"#4da3ff",
-      yNear:1500, yFar:2500, zLow:200, zHigh:1600, visible:true, weight:1 },
+    { id:"Z_ground", name:"Ground", plane:"front", color:"#e3b341",
+      yNear:0,    yFar:1600, zLow:0,   zHigh:300,  xAt:0, visible:true, weight:1 },
+    { id:"Z_close",  name:"Close zone", plane:"front", color:"#f85149",
+      yNear:900,  yFar:1500, zLow:200, zHigh:1600, xAt:0, visible:true, weight:2 },
+    { id:"Z_near",   name:"Near zone", plane:"front", color:"#4da3ff",
+      yNear:1500, yFar:2500, zLow:200, zHigh:1600, xAt:0, visible:true, weight:1 },
+    { id:"Z_floor",  name:"Floor footprint", plane:"top", color:"#a371f7",
+      yNear:0,    yFar:2000, xNear:-1000, xFar:1000, visible:true, weight:1 },
   ];
 }
-// Four corners of a zone band in front-plane coords ({x:Y, y:Z}). Outboard is
-// -X for a LEFT door, +X for a RIGHT door (matches doorLocalToPlane mirroring).
+// Backfill any missing fields so older/partial zones stay valid.
+function normalizeZone(z, i){
+  const base={ id:"Z"+(i+1), name:"Zone "+(i+1), plane:"front",
+    color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500,
+    zLow:0, zHigh:1500, xAt:0, xNear:-1000, xFar:1000, visible:true, weight:1 };
+  const out=Object.assign(base, z);
+  out.plane = out.plane==="top" ? "top" : "front";
+  return out;
+}
+// Four corners of a zone in its OWN plane's 2D coords: front→{x:Y,y:Z},
+// top→{x:X,y:Y}. Outboard (Y) is −X/−Y for a LEFT door, + for a RIGHT door.
 function zonePolygon(zone, side){
   const so = side==="RH" ? 1 : -1;
+  if(zone.plane==="top"){
+    return [
+      { x: zone.xNear, y: so*zone.yNear },
+      { x: zone.xFar,  y: so*zone.yNear },
+      { x: zone.xFar,  y: so*zone.yFar },
+      { x: zone.xNear, y: so*zone.yFar },
+    ];
+  }
   return [
     { x: so*zone.yNear, y: zone.zLow },
     { x: so*zone.yFar,  y: zone.zLow },
     { x: so*zone.yFar,  y: zone.zHigh },
     { x: so*zone.yNear, y: zone.zHigh },
+  ];
+}
+// Four world-space corners {x:X,y:Y,z:Z} for the 3D view. A front band stands
+// vertically at X = xAt; a top band lies flat on the floor at Z = 0.
+function zoneWorldCorners(zone, side){
+  const so = side==="RH" ? 1 : -1;
+  if(zone.plane==="top"){
+    return [
+      { x:zone.xNear, y:so*zone.yNear, z:0 },
+      { x:zone.xFar,  y:so*zone.yNear, z:0 },
+      { x:zone.xFar,  y:so*zone.yFar,  z:0 },
+      { x:zone.xNear, y:so*zone.yFar,  z:0 },
+    ];
+  }
+  const x=zone.xAt||0;
+  return [
+    { x, y:so*zone.yNear, z:zone.zLow },
+    { x, y:so*zone.yFar,  z:zone.zLow },
+    { x, y:so*zone.yFar,  z:zone.zHigh },
+    { x, y:so*zone.yNear, z:zone.zHigh },
   ];
 }
 function defaultProject(){
@@ -1089,12 +1137,13 @@ function coverageMetrics(cfg, opts){
     const activeSensors=cfg.sensors.filter(s=>s.active && s.showFov!==false);
     const out={};
     for(const z of zones){
+      const plane = z.plane==="top" ? "top" : "front";
       const samples=zoneSamplePoints(z, side, gridMm);
       const total=samples.length, perPos=[];
       let sum=0, worst=total?101:0, best=0;
       for(const pct of positions){
         const od=doorAngleForPercent(pct,cfg.door,side);
-        const fovs=activeSensors.map(s=>sensorFovProject(s,cfg.door,od,side,"front"));
+        const fovs=activeSensors.map(s=>sensorFovProject(s,cfg.door,od,side,plane));
         let covered=0;
         for(const pt of samples)
           if(fovs.some(f=>f.length>=3 && pointInPolygon(pt,f))) covered++;
@@ -1908,6 +1957,22 @@ function draw3DScene(){
   ctx.font="bold 12px sans-serif"; ctx.fillStyle=cssVar("--accent"); ctx.textAlign="center";
   ctx.fillText("FRONT",lxf.x,lxf.y-8); ctx.fillText("REAR",lxr.x,lxr.y-8);
   ctx.textAlign="left";
+  // Swept door envelope projected flat on the floor (z=0) — the same footprint
+  // the Top view shows. Drawn before the 3D bodies so they overlay it.
+  if($("showSwept") && $("showSwept").checked){
+    let all=[];
+    for(const pct of d.positionsPct){ const od=doorAngleForPercent(pct,d,side);
+      all=all.concat(doorFootprintTop(d,od,side)); }
+    const hull=convexHull(all);
+    if(hull.length>=3){
+      ctx.beginPath();
+      hull.forEach((p,i)=>{ const q=project3D({x:p.x,y:p.y,z:0});
+        i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+      ctx.closePath();
+      ctx.fillStyle="rgba(163,113,247,.16)"; ctx.fill();
+      ctx.strokeStyle="rgba(163,113,247,.7)"; ctx.lineWidth=1.5; ctx.stroke();
+    }
+  }
   // collect depth-sorted faces: door prism + swept ghosts + FOV frustums + obstacles
   let faces=[];
   if($("showGhost").checked){
@@ -1974,11 +2039,22 @@ function draw3DScene(){
       faces.push({pts:top3d,fill,stroke,lw:1});
     }
   }
+  // Coverage zones as 3D quads (front = vertical at X=xAt, top = flat on floor)
+  if($("showZones") && $("showZones").checked && project.zones){
+    for(const z of project.zones){ if(!z.visible) continue;
+      faces.push({ pts:zoneWorldCorners(z,side), fill:hexToRgba(z.color,0.12),
+        stroke:z.color, lw:1.5, zoneLabel:z }); }
+  }
   // Door photo draped on the panel (depth-sorted with everything else)
   faces=faces.concat(doorImageFaces(d, openDeg, side));
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
   faces.sort((a,b)=>b.depth-a.depth);
   faces.forEach(fc=> fc.tex ? drawTexQuad(fc) : face3(fc.pts, fc.fill, fc.stroke, fc.lw));
+  // Zone name labels at a corner (drawn after, so they sit on top).
+  faces.forEach(fc=>{ if(!fc.zoneLabel) return; const z=fc.zoneLabel;
+    const q=project3D(fc.pts[3]);
+    ctx.fillStyle=z.color; ctx.font="11px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(z.name, q.x+4, q.y-4); });
   // A subtle centre ray gives the translucent volume a clear sensing direction.
   apexes.forEach(({s,apex,axisEnd})=>{
     if(s.showFov!==false && axisEnd) line3Fov(apex,axisEnd,sensorColor(s)+"aa",1.25);
@@ -2216,17 +2292,18 @@ function drawRegions(){
       c.x+6, c.y-6);
   }
 }
-// Coverage zones on the FRONT view: dashed band + covered/uncovered sample dots
-// (green = inside a FOV at the current door position, red = gap) + a live %.
+// Coverage zones on the Front (Y-Z) OR Top (X-Y) view: dashed band + covered /
+// uncovered sample dots (green = inside a FOV at the current door position,
+// red = gap) + a live %. Each zone draws only on the plane it belongs to.
 function drawZones(){
-  if(curPlane!=="front" || !$("showZones") || !$("showZones").checked || !project.zones) return;
+  if((curPlane!=="front" && curPlane!=="top") || !$("showZones") || !$("showZones").checked || !project.zones) return;
   const side=project.project.doorSide;
   const od=doorAngleForPercent(project.view.doorPct,project.door,side);
   const fovs=project.sensors.filter(s=>s.active && s.showFov!==false)
-    .map(s=>sensorFovProject(s,project.door,od,side,"front"));
+    .map(s=>sensorFovProject(s,project.door,od,side,curPlane));
   const gridMm=Math.max(20,(project.overlap&&project.overlap.gridMm)||60);
   for(const z of project.zones){
-    if(!z.visible) continue;
+    if(!z.visible || (z.plane==="top"?"top":"front")!==curPlane) continue;
     const poly=zonePolygon(z, side);
     polyPath(poly);
     ctx.fillStyle=hexToRgba(z.color,0.06); ctx.fill();
@@ -2311,7 +2388,6 @@ function bindTabs(){
     if(b.dataset.tab==="regions") renderRegionList();
     if(b.dataset.tab==="zones"){
       if($("showZones")) $("showZones").checked=true;
-      if(project.view.plane!=="front" && project.view.plane!=="split") setViewPlane("front");
       coverageCache=null; renderZonePanel(); render();
     }
     if(b.dataset.tab==="compare") renderComparePanel();
@@ -3135,11 +3211,13 @@ function updateZoneStats(){
       : `<span style="color:var(--muted)">no samples in band</span>`;
   }
 }
-function addZone(){
+function addZone(plane){
+  plane = plane==="top" ? "top" : "front";
   const i=project.zones.length;
-  project.zones.push({ id:"Z"+Date.now().toString(36), name:"Zone "+(i+1),
-    color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500, zLow:0, zHigh:1500,
-    visible:true, weight:1 });
+  const base={ id:"Z"+Date.now().toString(36), name:(plane==="top"?"Top":"Front")+" zone "+(i+1),
+    plane, color:ZONE_PALETTE[i%ZONE_PALETTE.length], yNear:0, yFar:1500,
+    zLow:0, zHigh:1500, xAt:0, xNear:-1000, xFar:1000, visible:true, weight:1 };
+  project.zones.push(base);
   coverageCache=null; renderZonePanel(); render();
 }
 function renderZonePanel(){
@@ -3147,6 +3225,29 @@ function renderZonePanel(){
     g.value=(project.overlap&&project.overlap.gridMm)||60;
   const host=$("zoneList"); if(!host) return; host.innerHTML="";
   project.zones.forEach((z,idx)=>{
+    // geometry rows depend on the plane
+    const geoRows = z.plane==="top"
+      ? `<div class="row">
+           <div class="field"><label>Fore-aft near X (mm)</label><input data-zk="xNear" type="number" value="${z.xNear}"></div>
+           <div class="field"><label>Fore-aft far X (mm)</label><input data-zk="xFar" type="number" value="${z.xFar}"></div>
+         </div>
+         <div class="row" style="align-items:flex-end">
+           <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
+           <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
+           <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
+         </div>
+         <p class="mini" style="color:var(--muted);margin:0 0 4px">Flat on the floor (Z=0).</p>`
+      : `<div class="row">
+           <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
+           <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
+         </div>
+         <div class="row" style="align-items:flex-end">
+           <div class="field"><label>Z low (mm)</label><input data-zk="zLow" type="number" value="${z.zLow}"></div>
+           <div class="field"><label>Z high (mm)</label><input data-zk="zHigh" type="number" value="${z.zHigh}"></div>
+           <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
+         </div>
+         <div class="row"><div class="field"><label>Fore-aft position X (mm) — 3D placement</label>
+           <input data-zk="xAt" type="number" value="${z.xAt||0}"></div></div>`;
     const div=document.createElement("div"); div.className="group";
     div.innerHTML=`
       <span class="group-cap" style="color:${z.color}">${escapeHtml(z.name)}</span>
@@ -3158,25 +3259,25 @@ function renderZonePanel(){
       </div>
       <div class="row">
         <div class="field"><label>Name</label><input data-zk="name" value="${escapeHtml(z.name)}"></div>
-        <div class="field" style="max-width:74px"><label>Weight</label>
-          <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
-        <div class="field" style="max-width:44px"><label>Colour</label>
-          <input data-zk="color" type="color" value="${z.color}" style="padding:1px;height:28px"></div>
+        <div class="field" style="max-width:88px"><label>Plane</label>
+          <select data-zk="plane">
+            <option value="front" ${z.plane!=="top"?"selected":""}>Front (Y–Z)</option>
+            <option value="top" ${z.plane==="top"?"selected":""}>Top (X–Y)</option>
+          </select></div>
       </div>
       <div class="row">
-        <div class="field"><label>Out near (mm)</label><input data-zk="yNear" type="number" value="${z.yNear}"></div>
-        <div class="field"><label>Out far (mm)</label><input data-zk="yFar" type="number" value="${z.yFar}"></div>
+        <div class="field" style="max-width:80px"><label>Weight</label>
+          <input data-zk="weight" type="number" min="0" step="0.5" value="${z.weight||1}"></div>
+        <div class="field" style="max-width:52px"><label>Colour</label>
+          <input data-zk="color" type="color" value="${z.color}" style="padding:1px;height:28px"></div>
       </div>
-      <div class="row" style="align-items:flex-end">
-        <div class="field"><label>Z low (mm)</label><input data-zk="zLow" type="number" value="${z.zLow}"></div>
-        <div class="field"><label>Z high (mm)</label><input data-zk="zHigh" type="number" value="${z.zHigh}"></div>
-        <button data-zdel="1" style="font-size:10px;padding:5px 8px;margin-bottom:9px">Delete</button>
-      </div>`;
+      ${geoRows}`;
     div.querySelectorAll("[data-zk]").forEach(inp=>{
       const k=inp.dataset.zk;
-      const ev=(inp.type==="checkbox"||inp.type==="color")?"change":"input";
+      const ev=(inp.type==="checkbox"||inp.type==="color"||inp.tagName==="SELECT")?"change":"input";
       inp.addEventListener(ev,()=>{
         if(k==="visible") z.visible=inp.checked;
+        else if(k==="plane"){ z.plane=inp.value; coverageCache=null; renderZonePanel(); render(); return; }
         else if(k==="name"||k==="color"){ z[k]=inp.value;
           if(k==="color"){ const cap=div.querySelector(".group-cap");
             if(cap) cap.style.color=inp.value; } }
@@ -3189,9 +3290,14 @@ function renderZonePanel(){
     });
     host.appendChild(div);
   });
-  const add=document.createElement("button");
-  add.textContent="+ Add zone"; add.className="primary";
-  add.onclick=addZone; host.appendChild(add);
+  const bar=document.createElement("div"); bar.className="row";
+  const addF=document.createElement("button");
+  addF.textContent="+ Front zone"; addF.className="primary"; addF.style.flex="1";
+  addF.onclick=()=>addZone("front");
+  const addT=document.createElement("button");
+  addT.textContent="+ Top zone"; addT.style.flex="1";
+  addT.onclick=()=>addZone("top");
+  bar.appendChild(addF); bar.appendChild(addT); host.appendChild(bar);
   updateZoneStats();
 }
 
@@ -3345,9 +3451,7 @@ function normalizeLoaded(data){
     r, { points:Array.isArray(r&&r.points)?r.points:[] })) : [];
   // Coverage zones: backfill per-zone defaults; fall back to defaults if absent.
   pj.zones = Array.isArray(data.zones) && data.zones.length
-    ? data.zones.map((z,i)=>Object.assign(
-        { id:"Z"+(i+1), name:"Zone "+(i+1), color:ZONE_PALETTE[i%ZONE_PALETTE.length],
-          yNear:0, yFar:1500, zLow:0, zHigh:1500, visible:true, weight:1 }, z))
+    ? data.zones.map((z,i)=>normalizeZone(z,i))
     : defaultZones();
   pj.view = Object.assign(defaultProject().view, data.view||{});
   if(!["front","top","split","3d"].includes(pj.view.plane))
