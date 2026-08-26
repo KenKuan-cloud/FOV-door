@@ -488,7 +488,10 @@ a.dl{color:var(--accent)}
             <div class="field"><label>Pitch step (°)</label><input id="opt_pitchStep" type="number" value="10" min="1" step="1"></div>
           </div>
           <div id="opt_boundsBox" style="display:none">
-            <p class="mini" style="color:var(--muted);margin:2px 0">Mounting bounds (door-local mm) and step:</p>
+            <label class="mini" style="display:flex;align-items:center;gap:5px;margin:2px 0 6px">
+              <input type="checkbox" id="opt_inDoor" checked>
+              Keep the sensor inside the door boundary (silhouette)</label>
+            <p class="mini" style="color:var(--muted);margin:2px 0">Mounting bounds (door-local mm) and step — a bounding box the search still clips to the door:</p>
             <div class="row">
               <div class="field"><label>posY min</label><input id="opt_yMin" type="number"></div>
               <div class="field"><label>posY max</label><input id="opt_yMax" type="number"></div>
@@ -509,6 +512,18 @@ a.dl{color:var(--accent)}
           <button class="primary" id="opt_runBtn" onclick="runOptimize()" style="flex:1">Run optimize</button>
           <button id="opt_cancelBtn" onclick="optCancel=true" style="display:none">Cancel</button>
           <button id="opt_applyBtn" onclick="applyOptimize()" style="display:none">Apply best</button>
+        </div>
+        <div class="group" style="margin-top:10px">
+          <span class="group-cap">Snapshots</span>
+          <p class="mini" style="color:var(--muted);margin:0 0 6px">Save the live sensors, then
+            flip between your <b>saved</b> layout and the <b>optimized best</b> instantly. (The
+            layout from just before a run is auto-saved.)</p>
+          <div class="row">
+            <button onclick="saveSensorSnapshot()" style="flex:1">💾 Save current</button>
+            <button id="opt_loadSavedBtn" onclick="loadSensorSnapshot('saved')" style="flex:1" disabled>Load saved</button>
+            <button id="opt_loadBestBtn" onclick="loadSensorSnapshot('best')" style="flex:1" disabled>Load best</button>
+          </div>
+          <p class="mini" id="opt_snapInfo" style="color:var(--muted);margin:5px 0 0"></p>
         </div>
         <div id="opt_progWrap" style="display:none;margin-top:8px">
           <div style="height:6px;background:var(--panel2);border-radius:3px;overflow:hidden">
@@ -3638,10 +3653,39 @@ function drawCompareOverlay(){
    project and running coverageMetrics through the shared optimizeObjective, so
    the optimizer maximises exactly what Compare/Zones report. Runs async, yielding
    to the UI between variable sweeps so the progress bar animates and Cancel works. */
-let optCancel=false, optState=null;
+let optCancel=false, optState=null, optSaved=null;
 const optTick=()=>new Promise(r=>setTimeout(r,0));
 function optRange(a,b,step){ const out=[]; if(!(step>0)) return [a];
   for(let v=a; v<=b+1e-9; v+=step) out.push(Math.round(v*100)/100); return out; }
+// Is a door-local mount point (py=posY, pz=posZ) inside the door silhouette?
+function pointInDoorBoundary(py, pz){
+  const prof=project.door.profile;
+  if(!Array.isArray(prof) || prof.length<3) return true;      // no profile → unconstrained
+  return pointInPolygon({x:py, y:pz}, prof.map(p=>({x:p.y, y:p.z})));
+}
+/* ---- Optimize snapshots: flip between the saved layout and the best one ---- */
+function updateSnapUi(){
+  const sv=$("opt_loadSavedBtn"), bt=$("opt_loadBestBtn"), info=$("opt_snapInfo");
+  if(sv) sv.disabled=!optSaved;
+  if(bt) bt.disabled=!(optState && optState.work);
+  if(info) info.textContent=(optSaved?`Saved set: ${optSaved.length} sensor(s). `:"No saved set yet. ")
+    +(optState&&optState.work?"Best set ready.":"No optimized set yet.");
+}
+function saveSensorSnapshot(){
+  optSaved=JSON.parse(JSON.stringify(project.sensors));
+  const st=$("opt_status"); st.style.color="var(--accent)";
+  st.textContent="Saved current sensors — flip back any time with Load saved.";
+  updateSnapUi();
+}
+function loadSensorSnapshot(which){
+  const src = which==="best" ? (optState && optState.work && optState.work.sensors) : optSaved;
+  if(!src) return;
+  project.sensors=JSON.parse(JSON.stringify(src));
+  coverageCache=null; renderSensorList(); recomputeAll(); renderZonePanel(); render();
+  const st=$("opt_status"); st.style.color="var(--accent)";
+  st.textContent = which==="best" ? "Loaded optimized best." : "Loaded saved sensors.";
+  updateSnapUi();
+}
 function renderOptimizePanel(){
   const box=$("opt_boundsBox"), mode=$("opt_mode");
   if(mode && !mode._bound){ mode._bound=1;
@@ -3654,6 +3698,7 @@ function renderOptimizePanel(){
   if(!isFinite(ymin)){ ymin=-1010; ymax=0; zmin=-1240; zmax=0; }
   const setIf=(id,v)=>{ const el=$(id); if(el && el.value==="") el.value=Math.round(v); };
   setIf("opt_yMin",ymin); setIf("opt_yMax",ymax); setIf("opt_zMin",zmin); setIf("opt_zMax",zmax);
+  updateSnapUi();
 }
 async function runOptimize(){
   const st=$("opt_status");
@@ -3679,10 +3724,13 @@ async function runOptimize(){
     posYs=optRange(num("opt_yMin",-1010),num("opt_yMax",0),posStep);
     posZs=optRange(num("opt_zMin",-1240),num("opt_zMax",0),posStep);
   }
+  const constrainDoor = mode==="full" && $("opt_inDoor") && $("opt_inDoor").checked;
   const vars = mode==="full" ? ["posY","posZ","yaw","pitch"] : ["yaw","pitch"];
   const keyOf={posY:"posY",posZ:"posZ",yaw:"yawDeg",pitch:"pitchDeg"};
   const candOf={posY:posYs,posZ:posZs,yaw:yaws,pitch:pitches};
   const passes=2, totalSteps=passes*idxs.length*vars.length;
+  // Remember the pre-optimize layout so "Load saved" always returns to it.
+  if(!optSaved) optSaved=JSON.parse(JSON.stringify(project.sensors));
   // UI: running
   optCancel=false; optState=null;
   $("opt_runBtn").disabled=true; $("opt_cancelBtn").style.display="";
@@ -3696,7 +3744,13 @@ async function runOptimize(){
       for(const v of vars){ if(optCancel) break;
         const key=keyOf[v], cands=candOf[v];
         let bestVal=s[key], bestLocal=bestObj;
-        for(const c of cands){ if(c==null) continue; s[key]=c;
+        for(const c of cands){ if(c==null) continue;
+          // In full mode, keep the mount inside the door silhouette.
+          if(constrainDoor && (v==="posY"||v==="posZ")){
+            const py = v==="posY"? c : s.posY, pz = v==="posZ"? c : s.posZ;
+            if(!pointInDoorBoundary(py,pz)) continue;
+          }
+          s[key]=c;
           const o=evalObj(work); if(o>bestLocal+1e-9){ bestLocal=o; bestVal=c; } }
         s[key]=bestVal; bestObj=bestLocal;
         step++;
@@ -3715,6 +3769,7 @@ async function runOptimize(){
   $("opt_runBtn").disabled=false; $("opt_cancelBtn").style.display="none";
   $("opt_progWrap").style.display="none"; $("opt_applyBtn").style.display="";
   st.textContent = optCancel ? "Cancelled — best-so-far kept below." : "Done — review, then Apply best.";
+  updateSnapUi();
 }
 function renderOptimizeResult(before, after, objB, objA){
   const zoneRows=project.zones.filter(z=>z.role!=="none").map(z=>{
@@ -3756,11 +3811,12 @@ function renderOptimizeResult(before, after, objB, objA){
 }
 function applyOptimize(){
   if(!optState || !optState.work) return;
-  project.sensors=optState.work.sensors;
+  project.sensors=JSON.parse(JSON.stringify(optState.work.sensors));
   coverageCache=null;
   renderSensorList(); recomputeAll(); renderZonePanel(); render();
-  $("opt_status").textContent="Applied — sensors updated. Re-run to refine further.";
-  $("opt_applyBtn").style.display="none";
+  $("opt_status").style.color="var(--accent)";
+  $("opt_status").textContent="Applied best. Use Load saved / Load best to flip between them.";
+  updateSnapUi();
 }
 
 /* ====================== 6. IMPORT / EXPORT ====================== */
