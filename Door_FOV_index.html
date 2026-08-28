@@ -865,6 +865,71 @@ function beamProject(facing, pitchDeg, plane){
     ? { angle:Math.atan2(ay, ax), scale:Math.hypot(ax, ay) }   // X-Y view
     : { angle:Math.atan2(az, ay), scale:Math.hypot(ay, az) };  // Y-Z (front) view
 }
+// ---- Axis angle conversions (door-local beam axis) ----
+// Door-local beam axis from yaw/pitch: X=sin(p), Y=cos(yaw)*cos(p), Z=sin(yaw)*cos(p)
+function beamAxisFromYawPitch(yawDeg, pitchDeg){
+  const y=deg2rad(yawDeg), p=deg2rad(pitchDeg||0);
+  const cp=Math.cos(p), sp=Math.sin(p);
+  return { x:sp, y:Math.cos(y)*cp, z:Math.sin(y)*cp };
+}
+function yawPitchFromAxis(ax,ay,az){
+  const len=Math.hypot(ax,ay,az); if(len<1e-12) return {yawDeg:0,pitchDeg:0};
+  ax/=len; ay/=len; az/=len;
+  const pitchDeg=rad2deg(Math.asin(Math.max(-1,Math.min(1,ax))));
+  const yawDeg=((rad2deg(Math.atan2(az,ay))%360)+360)%360;
+  return {yawDeg:+yawDeg.toFixed(4), pitchDeg:+pitchDeg.toFixed(4)};
+}
+// 3D Included Angle: signed angle between beam axis and each world axis
+function includedAnglesFromYawPitch(yawDeg, pitchDeg){
+  const a=beamAxisFromYawPitch(yawDeg, pitchDeg);
+  const len=Math.hypot(a.x,a.y,a.z);
+  const rawX=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.x/len))));
+  const rawY=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.y/len))));
+  const rawZ=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.z/len))));
+  return { angX: a.x>=0?rawX:-rawX, angY: a.y>=0?rawY:-rawY, angZ: a.z>=0?rawZ:-rawZ };
+}
+// Projected Angle: atan2 projections onto coordinate planes
+function projectedAnglesFromYawPitch(yawDeg, pitchDeg){
+  const a=beamAxisFromYawPitch(yawDeg, pitchDeg);
+  return {
+    projXY: rad2deg(Math.atan2(a.y, a.x)),
+    projXZ: rad2deg(Math.atan2(a.z, a.x)),
+    projYZ: rad2deg(Math.atan2(a.z, a.y))
+  };
+}
+// Recover beam axis from 3D Included Angles (angX, angY, angZ).
+// Each angI = sign(nI)*acos(nI/|n|). We recover direction components:
+// nI_sign = sign(angI), |angI| = acos(|nI|/|n|) => |nI| = cos(|angI|).
+function yawPitchFromIncludedAngles(angX, angY, angZ){
+  const ax=Math.cos(deg2rad(Math.abs(angX)))*(angX>=0?1:-1);
+  const ay=Math.cos(deg2rad(Math.abs(angY)))*(angY>=0?1:-1);
+  const az=Math.cos(deg2rad(Math.abs(angZ)))*(angZ>=0?1:-1);
+  return yawPitchFromAxis(ax,ay,az);
+}
+// Recover beam axis from Projected Angles (projYZ in particular gives yaw;
+// projXZ or projXY disambiguates pitch).
+function yawPitchFromProjectedAngles(projXY, projXZ, projYZ){
+  // projYZ = atan2(nz, ny) => yaw direction in Y-Z plane
+  // projXZ = atan2(nz, nx) => relates Z to X
+  // projXY = atan2(ny, nx) => relates Y to X
+  // Reconstruct axis: use projYZ for yaw, projXY for pitch info
+  const yz=deg2rad(projYZ), xy=deg2rad(projXY);
+  // ny/nz = 1/tan(projYZ), nx/ny = 1/tan(projXY)
+  // Let ny=cos(yz), nz=sin(yz) (unit projection on YZ plane)
+  // Then nx from projXY: nx/ny = cos(xy)/sin(xy) when projXY defined
+  // But we need the full 3D vector. Use all three for robustness:
+  // From projXY: ny = sin(xy)*k, nx = cos(xy)*k
+  // From projXZ: nz = sin(projXZ)*m, nx = cos(projXZ)*m
+  // From projYZ: nz = sin(yz)*j, ny = cos(yz)*j
+  // Best approach: reconstruct from two independent projections
+  const xz=deg2rad(projXZ);
+  const ny=Math.sin(xy), nx_a=Math.cos(xy);
+  const nz=Math.sin(xz), nx_b=Math.cos(xz);
+  const nx=(Math.abs(nx_a)+Math.abs(nx_b)>1e-9)?(nx_a+nx_b)/2 : 0;
+  return yawPitchFromAxis(nx, ny, nz);
+}
+function fmtSA(v){ return (v>=0?"+":"")+v.toFixed(1)+"°"; }
+
 // Ray-casting point-in-polygon.
 function pointInPolygon(pt, poly){
   let inside=false;
@@ -2691,9 +2756,44 @@ function renderSensorList(){
         <div class="field"><label>Pos X fore-aft</label><input type="number" data-k="posX" value="${s.posX}"></div>
       </div>
       <div class="row">
-        <div class="field"><label>Yaw (°)</label><input type="number" data-k="yawDeg" value="${s.yawDeg}"></div>
-        <div class="field"><label>Pitch fwd (°)</label><input type="number" data-k="pitchDeg" value="${s.pitchDeg||0}"></div>
+        <div class="field"><label>Yaw (°)</label><input type="number" data-k="yawDeg" value="${s.yawDeg}" step="0.1"></div>
+        <div class="field"><label>Pitch fwd (°)</label><input type="number" data-k="pitchDeg" value="${s.pitchDeg||0}" step="0.1"></div>
       </div>
+      <details class="axis-angles" style="margin:4px 0 6px;font-size:11px">
+        <summary style="cursor:pointer;color:var(--accent,#4da3ff);font-weight:600;user-select:none">Axis Angles (3D / Projected)</summary>
+        <div style="margin-top:4px">
+          <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
+            <label style="font-size:10px;color:#888;min-width:100px">3D Included Angle</label>
+            <select class="angle-mode-sel" data-mode="included" style="font-size:10px;padding:1px 3px">
+              <option value="display">Display</option><option value="input">Input</option></select>
+          </div>
+          <div class="row incl-display">
+            <div class="field"><label style="color:#ff5555">∠X</label><input type="text" class="ax-incl-x" readonly style="background:#f8f8f8;color:#666"></div>
+            <div class="field"><label style="color:#55cc55">∠Y</label><input type="text" class="ax-incl-y" readonly style="background:#f8f8f8;color:#666"></div>
+            <div class="field"><label style="color:#5599ff">∠Z</label><input type="text" class="ax-incl-z" readonly style="background:#f8f8f8;color:#666"></div>
+          </div>
+          <div class="row incl-input" style="display:none">
+            <div class="field"><label style="color:#ff5555">∠X (°)</label><input type="number" class="ax-incl-x-in" step="0.1"></div>
+            <div class="field"><label style="color:#55cc55">∠Y (°)</label><input type="number" class="ax-incl-y-in" step="0.1"></div>
+            <div class="field"><label style="color:#5599ff">∠Z (°)</label><input type="number" class="ax-incl-z-in" step="0.1"></div>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center;margin:6px 0 3px">
+            <label style="font-size:10px;color:#888;min-width:100px">Projected Angle</label>
+            <select class="angle-mode-sel" data-mode="projected" style="font-size:10px;padding:1px 3px">
+              <option value="display">Display</option><option value="input">Input</option></select>
+          </div>
+          <div class="row proj-display">
+            <div class="field"><label style="color:#cc88ff">XY</label><input type="text" class="ax-proj-xy" readonly style="background:#f8f8f8;color:#666"></div>
+            <div class="field"><label style="color:#ffaa44">XZ</label><input type="text" class="ax-proj-xz" readonly style="background:#f8f8f8;color:#666"></div>
+            <div class="field"><label style="color:#44bbbb">YZ</label><input type="text" class="ax-proj-yz" readonly style="background:#f8f8f8;color:#666"></div>
+          </div>
+          <div class="row proj-input" style="display:none">
+            <div class="field"><label style="color:#cc88ff">XY (°)</label><input type="number" class="ax-proj-xy-in" step="0.1"></div>
+            <div class="field"><label style="color:#ffaa44">XZ (°)</label><input type="number" class="ax-proj-xz-in" step="0.1"></div>
+            <div class="field"><label style="color:#44bbbb">YZ (°)</label><input type="number" class="ax-proj-yz-in" step="0.1"></div>
+          </div>
+        </div>
+      </details>
       <div class="row">
         <div class="field"><label>H-FOV (°)</label><input type="number" data-k="hFovDeg" value="${s.hFovDeg}"></div>
         <div class="field"><label>V-FOV (°)</label><input type="number" data-k="vFovDeg" value="${s.vFovDeg}"></div>
@@ -2714,13 +2814,75 @@ function renderSensorList(){
       det.classList.toggle("collapsed"); s._uiCollapsed=!isCol;
       this.textContent=isCol?"▼ Hide":"▶ Show";
     });
+    // -- Axis angle display/input wiring --
+    function updateAxisDisplay(){
+      const inc=includedAnglesFromYawPitch(s.yawDeg, s.pitchDeg||0);
+      const prj=projectedAnglesFromYawPitch(s.yawDeg, s.pitchDeg||0);
+      const qi=k=>d.querySelector(".ax-incl-"+k);
+      const qp=k=>d.querySelector(".ax-proj-"+k);
+      qi("x").value=fmtSA(inc.angX); qi("y").value=fmtSA(inc.angY); qi("z").value=fmtSA(inc.angZ);
+      qp("xy").value=fmtSA(prj.projXY); qp("xz").value=fmtSA(prj.projXZ); qp("yz").value=fmtSA(prj.projYZ);
+      // also populate input fields with current values (for when switching to input mode)
+      const qii=k=>d.querySelector(".ax-incl-"+k+"-in");
+      const qpi=k=>d.querySelector(".ax-proj-"+k+"-in");
+      qii("x").value=+inc.angX.toFixed(1); qii("y").value=+inc.angY.toFixed(1); qii("z").value=+inc.angZ.toFixed(1);
+      qpi("xy").value=+prj.projXY.toFixed(1); qpi("xz").value=+prj.projXZ.toFixed(1); qpi("yz").value=+prj.projYZ.toFixed(1);
+    }
+    function updateYawPitchFromUI(){
+      const yInp=d.querySelector("[data-k=yawDeg]"), pInp=d.querySelector("[data-k=pitchDeg]");
+      yInp.value=s.yawDeg.toFixed(1); pInp.value=s.pitchDeg.toFixed(1);
+    }
+    // Mode toggles for included/projected angle sections
+    d.querySelectorAll(".angle-mode-sel").forEach(sel=>{
+      sel.addEventListener("change",function(){
+        const mode=this.dataset.mode; // "included" or "projected"
+        const isInput=this.value==="input";
+        d.querySelector("."+mode.slice(0,4)+"-display").style.display=isInput?"none":"";
+        d.querySelector("."+mode.slice(0,4)+"-input").style.display=isInput?"":"none";
+        if(!isInput) updateAxisDisplay();
+      });
+    });
+    // Included angle input -> update yaw/pitch
+    d.querySelectorAll(".ax-incl-x-in,.ax-incl-y-in,.ax-incl-z-in").forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        const ax=parseFloat(d.querySelector(".ax-incl-x-in").value)||0;
+        const ay=parseFloat(d.querySelector(".ax-incl-y-in").value)||0;
+        const az=parseFloat(d.querySelector(".ax-incl-z-in").value)||0;
+        const yp=yawPitchFromIncludedAngles(ax,ay,az);
+        s.yawDeg=yp.yawDeg; s.pitchDeg=yp.pitchDeg;
+        updateYawPitchFromUI();
+        // update projected display if it's in display mode
+        const prj=projectedAnglesFromYawPitch(s.yawDeg, s.pitchDeg);
+        const qp=k=>d.querySelector(".ax-proj-"+k);
+        qp("xy").value=fmtSA(prj.projXY); qp("xz").value=fmtSA(prj.projXZ); qp("yz").value=fmtSA(prj.projYZ);
+        recomputeAll(); render();
+      });
+    });
+    // Projected angle input -> update yaw/pitch
+    d.querySelectorAll(".ax-proj-xy-in,.ax-proj-xz-in,.ax-proj-yz-in").forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        const xy=parseFloat(d.querySelector(".ax-proj-xy-in").value)||0;
+        const xz=parseFloat(d.querySelector(".ax-proj-xz-in").value)||0;
+        const yz=parseFloat(d.querySelector(".ax-proj-yz-in").value)||0;
+        const yp=yawPitchFromProjectedAngles(xy,xz,yz);
+        s.yawDeg=yp.yawDeg; s.pitchDeg=yp.pitchDeg;
+        updateYawPitchFromUI();
+        // update included display if it's in display mode
+        const inc=includedAnglesFromYawPitch(s.yawDeg, s.pitchDeg);
+        const qi=k=>d.querySelector(".ax-incl-"+k);
+        qi("x").value=fmtSA(inc.angX); qi("y").value=fmtSA(inc.angY); qi("z").value=fmtSA(inc.angZ);
+        recomputeAll(); render();
+      });
+    });
     d.querySelectorAll("[data-k]").forEach(inp=>{
       inp.addEventListener("input",()=>{
         const k=inp.dataset.k;
         s[k] = inp.type==="checkbox"?inp.checked : (inp.type==="number"?parseFloat(inp.value)||0:inp.value);
+        if(k==="yawDeg"||k==="pitchDeg") updateAxisDisplay();
         recomputeAll(); render();
       });
     });
+    updateAxisDisplay();
     el.appendChild(d);
   });
 }
