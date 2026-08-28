@@ -205,6 +205,17 @@ a.dl{color:var(--accent)}
         </div>
         <div class="field"><label>Test date</label><input id="p_date" type="date"></div>
         <div class="field"><label>Notes</label><textarea id="p_notes" rows="3"></textarea></div>
+        <div class="group" style="margin-top:10px">
+          <span class="group-cap">Axis Direction (for Axis Angle display / input)</span>
+          <p class="hint" style="margin-bottom:6px">Flip an axis when your CAD coordinate system uses
+            the opposite direction. This only affects the 3D Included Angle and Projected Angle
+            readouts in the Sensor panel &mdash; it does not change the internal yaw/pitch or FOV geometry.</p>
+          <div class="row" style="gap:12px">
+            <label class="mini" style="color:#ff5555"><input type="checkbox" id="p_flipX"> Flip X</label>
+            <label class="mini" style="color:#55cc55"><input type="checkbox" id="p_flipY"> Flip Y</label>
+            <label class="mini" style="color:#5599ff"><input type="checkbox" id="p_flipZ"> Flip Z</label>
+          </div>
+        </div>
       </div>
 
       <!-- Page 2: Door -->
@@ -768,7 +779,8 @@ function defaultProject(){
   return {
     schemaVersion:2,
     project:{ name:"New FOV Study", vehicleModel:"", customer:"",
-      doorSide:"LH", preparedBy:"", testDate:new Date().toISOString().slice(0,10), notes:"" },
+      doorSide:"LH", preparedBy:"", testDate:new Date().toISOString().slice(0,10), notes:"",
+      axisFlipX:1, axisFlipY:1, axisFlipZ:1 },
     door:{ hingeX:0, hingeY:0, hingeZ:1500, heightMm:1250, lengthMm:1000,
       maxOpenDeg:80, baseAngleDeg:0, profile:wingDefaultProfile(),
       openTimeS:5, closeTimeS:5,
@@ -867,6 +879,7 @@ function beamProject(facing, pitchDeg, plane){
 }
 // ---- Axis angle conversions (door-local beam axis) ----
 // Door-local beam axis from yaw/pitch: X=sin(p), Y=cos(yaw)*cos(p), Z=sin(yaw)*cos(p)
+function axisFlip(){ const p=project.project; return {x:p.axisFlipX||1, y:p.axisFlipY||1, z:p.axisFlipZ||1}; }
 function beamAxisFromYawPitch(yawDeg, pitchDeg){
   const y=deg2rad(yawDeg), p=deg2rad(pitchDeg||0);
   const cp=Math.cos(p), sp=Math.sin(p);
@@ -879,54 +892,42 @@ function yawPitchFromAxis(ax,ay,az){
   const yawDeg=((rad2deg(Math.atan2(az,ay))%360)+360)%360;
   return {yawDeg:+yawDeg.toFixed(4), pitchDeg:+pitchDeg.toFixed(4)};
 }
-// 3D Included Angle: signed angle between beam axis and each world axis
+// 3D Included Angle: signed angle between beam axis and each (possibly flipped) world axis
 function includedAnglesFromYawPitch(yawDeg, pitchDeg){
-  const a=beamAxisFromYawPitch(yawDeg, pitchDeg);
-  const len=Math.hypot(a.x,a.y,a.z);
-  const rawX=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.x/len))));
-  const rawY=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.y/len))));
-  const rawZ=rad2deg(Math.acos(Math.max(-1,Math.min(1,a.z/len))));
-  return { angX: a.x>=0?rawX:-rawX, angY: a.y>=0?rawY:-rawY, angZ: a.z>=0?rawZ:-rawZ };
+  const a=beamAxisFromYawPitch(yawDeg, pitchDeg), f=axisFlip();
+  const bx=a.x*f.x, by=a.y*f.y, bz=a.z*f.z;
+  const len=Math.hypot(bx,by,bz);
+  const rawX=rad2deg(Math.acos(Math.max(-1,Math.min(1,bx/len))));
+  const rawY=rad2deg(Math.acos(Math.max(-1,Math.min(1,by/len))));
+  const rawZ=rad2deg(Math.acos(Math.max(-1,Math.min(1,bz/len))));
+  return { angX: bx>=0?rawX:-rawX, angY: by>=0?rawY:-rawY, angZ: bz>=0?rawZ:-rawZ };
 }
-// Projected Angle: atan2 projections onto coordinate planes
+// Projected Angle: atan2 projections onto coordinate planes (with axis flips)
 function projectedAnglesFromYawPitch(yawDeg, pitchDeg){
-  const a=beamAxisFromYawPitch(yawDeg, pitchDeg);
+  const a=beamAxisFromYawPitch(yawDeg, pitchDeg), f=axisFlip();
+  const bx=a.x*f.x, by=a.y*f.y, bz=a.z*f.z;
   return {
-    projXY: rad2deg(Math.atan2(a.y, a.x)),
-    projXZ: rad2deg(Math.atan2(a.z, a.x)),
-    projYZ: rad2deg(Math.atan2(a.z, a.y))
+    projXY: rad2deg(Math.atan2(by, bx)),
+    projXZ: rad2deg(Math.atan2(bz, bx)),
+    projYZ: rad2deg(Math.atan2(bz, by))
   };
 }
-// Recover beam axis from 3D Included Angles (angX, angY, angZ).
-// Each angI = sign(nI)*acos(nI/|n|). We recover direction components:
-// nI_sign = sign(angI), |angI| = acos(|nI|/|n|) => |nI| = cos(|angI|).
+// Recover beam axis from 3D Included Angles, then un-flip to get internal axis
 function yawPitchFromIncludedAngles(angX, angY, angZ){
-  const ax=Math.cos(deg2rad(Math.abs(angX)))*(angX>=0?1:-1);
-  const ay=Math.cos(deg2rad(Math.abs(angY)))*(angY>=0?1:-1);
-  const az=Math.cos(deg2rad(Math.abs(angZ)))*(angZ>=0?1:-1);
+  const f=axisFlip();
+  const ax=Math.cos(deg2rad(Math.abs(angX)))*(angX>=0?1:-1)*f.x;
+  const ay=Math.cos(deg2rad(Math.abs(angY)))*(angY>=0?1:-1)*f.y;
+  const az=Math.cos(deg2rad(Math.abs(angZ)))*(angZ>=0?1:-1)*f.z;
   return yawPitchFromAxis(ax,ay,az);
 }
-// Recover beam axis from Projected Angles (projYZ in particular gives yaw;
-// projXZ or projXY disambiguates pitch).
+// Recover beam axis from Projected Angles, then un-flip to get internal axis
 function yawPitchFromProjectedAngles(projXY, projXZ, projYZ){
-  // projYZ = atan2(nz, ny) => yaw direction in Y-Z plane
-  // projXZ = atan2(nz, nx) => relates Z to X
-  // projXY = atan2(ny, nx) => relates Y to X
-  // Reconstruct axis: use projYZ for yaw, projXY for pitch info
-  const yz=deg2rad(projYZ), xy=deg2rad(projXY);
-  // ny/nz = 1/tan(projYZ), nx/ny = 1/tan(projXY)
-  // Let ny=cos(yz), nz=sin(yz) (unit projection on YZ plane)
-  // Then nx from projXY: nx/ny = cos(xy)/sin(xy) when projXY defined
-  // But we need the full 3D vector. Use all three for robustness:
-  // From projXY: ny = sin(xy)*k, nx = cos(xy)*k
-  // From projXZ: nz = sin(projXZ)*m, nx = cos(projXZ)*m
-  // From projYZ: nz = sin(yz)*j, ny = cos(yz)*j
-  // Best approach: reconstruct from two independent projections
-  const xz=deg2rad(projXZ);
+  const f=axisFlip();
+  const xy=deg2rad(projXY), xz=deg2rad(projXZ);
   const ny=Math.sin(xy), nx_a=Math.cos(xy);
   const nz=Math.sin(xz), nx_b=Math.cos(xz);
   const nx=(Math.abs(nx_a)+Math.abs(nx_b)>1e-9)?(nx_a+nx_b)/2 : 0;
-  return yawPitchFromAxis(nx, ny, nz);
+  return yawPitchFromAxis(nx*f.x, ny*f.y, nz*f.z);
 }
 function fmtSA(v){ return (v>=0?"+":"")+v.toFixed(1)+"°"; }
 
@@ -2615,6 +2616,12 @@ function bindProject(){
     $(id).addEventListener("input",()=>{ project.project[map[id]]=$(id).value;
       if(id==="p_side"){ syncDoorSideToggle(); recomputeAll(); } render(); });
   }
+  ["X","Y","Z"].forEach(ax=>{
+    $("p_flip"+ax).addEventListener("change",function(){
+      project.project["axisFlip"+ax]=this.checked?-1:1;
+      renderSensorList();
+    });
+  });
 }
 function setDoorSide(side){
   project.project.doorSide=side;
@@ -2635,6 +2642,9 @@ function loadProjectFields(){
   $("p_name").value=p.name; $("p_vehicle").value=p.vehicleModel;
   $("p_customer").value=p.customer; $("p_side").value=p.doorSide;
   $("p_by").value=p.preparedBy; $("p_date").value=p.testDate; $("p_notes").value=p.notes;
+  $("p_flipX").checked=(p.axisFlipX||1)===-1;
+  $("p_flipY").checked=(p.axisFlipY||1)===-1;
+  $("p_flipZ").checked=(p.axisFlipZ||1)===-1;
   renderTestSetsList();
   syncDoorSideToggle();
 }
