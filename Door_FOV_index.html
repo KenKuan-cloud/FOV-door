@@ -821,7 +821,7 @@ function demoSensor(){
     partNo:"", serialNo:"", posX:0, posY:-960, posZ:-1150, yawDeg:195, pitchDeg:0,
     hFovDeg:90, vFovDeg:60, minRangeMm:100, maxRangeMm:1500,
     accuracyMm:10, updateRateHz:20, latencyMs:50,
-    warningMm:800, stopMm:300, shape:"Fan", active:true,
+    rollDeg:0, warningMm:800, stopMm:300, shape:"Fan", active:true,
     color:"#4da3ff", showFov:true };
 }
 
@@ -1285,8 +1285,13 @@ function sensorFovFrame(s, door, openDeg, side){
   const apex={x:door.hingeX+s.posX, y:pose.x, z:pose.y};
   const f=pose.facing, p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
   const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];   // beam axis
-  const hx=[cp, -Math.cos(f)*sp, -Math.sin(f)*sp]; // horizontal spread
-  const vx=[0, -Math.sin(f), Math.cos(f)];         // vertical spread
+  let   hx=[cp, -Math.cos(f)*sp, -Math.sin(f)*sp]; // horizontal spread
+  let   vx=[0, -Math.sin(f), Math.cos(f)];         // vertical spread
+  const roll=deg2rad(s.rollDeg||0);
+  if(roll){ const cr=Math.cos(roll), sr=Math.sin(roll);
+    const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
+    const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
+    hx=h2; vx=v2; }
   const maxR=Math.max(1,s.maxRangeMm||1), minR=Math.max(0,Math.min(s.minRangeMm||0,maxR));
   return { apex, ax, hx, vx,
     th:Math.tan(deg2rad((s.hFovDeg||1)/2))||1e-6,
@@ -1995,8 +2000,13 @@ function sensorConeGeom(s, door, openDeg, side, N){
   // Pitch rotates beam axis toward +X (positive = forward); keeps vx in Y-Z plane
   const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
   const ax=[sp,            Math.cos(f)*cp, Math.sin(f)*cp];  // beam axis (yaw + pitch)
-  const hx=[cp,           -Math.cos(f)*sp,-Math.sin(f)*sp];  // fore-aft spread axis
-  const vx=[0,            -Math.sin(f),    Math.cos(f)    ];  // elevation spread axis
+  let   hx=[cp,           -Math.cos(f)*sp,-Math.sin(f)*sp];  // fore-aft spread axis
+  let   vx=[0,            -Math.sin(f),    Math.cos(f)    ];  // elevation spread axis
+  const roll=deg2rad(s.rollDeg||0);
+  if(roll){ const cr=Math.cos(roll), sr=Math.sin(roll);
+    const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
+    const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
+    hx=h2; vx=v2; }
   const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
   const point=(R,u,v)=>{ const dir=V.norm([
     ax[0]+th*u*hx[0]+tv*v*vx[0], ax[1]+th*u*hx[1]+tv*v*vx[1],
@@ -2098,8 +2108,13 @@ function sweptFov3dFaces(door, side){
       const f=pose.facing;
       const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
       const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];
-      const hx=[cp,-Math.cos(f)*sp,-Math.sin(f)*sp];
-      const vx=[0, -Math.sin(f),    Math.cos(f)   ];
+      let   hx=[cp,-Math.cos(f)*sp,-Math.sin(f)*sp];
+      let   vx=[0, -Math.sin(f),    Math.cos(f)   ];
+      const rl=deg2rad(s.rollDeg||0);
+      if(rl){ const cr=Math.cos(rl), sr=Math.sin(rl);
+        const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
+        const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
+        hx=h2; vx=v2; }
       const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
       const ring=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
         const ch=th*Math.cos(t), sv=tv*Math.sin(t), R=s.maxRangeMm;
@@ -2807,6 +2822,9 @@ function renderSensorList(){
       <div class="row">
         <div class="field"><label>H-FOV (°)</label><input type="number" data-k="hFovDeg" value="${s.hFovDeg}"></div>
         <div class="field"><label>V-FOV (°)</label><input type="number" data-k="vFovDeg" value="${s.vFovDeg}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Roll (°)</label><input type="number" data-k="rollDeg" value="${s.rollDeg||0}"></div>
       </div>
       <div class="row">
         <div class="field"><label>Min range (mm)</label><input type="number" data-k="minRangeMm" value="${s.minRangeMm}"></div>
