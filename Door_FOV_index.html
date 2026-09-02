@@ -609,6 +609,7 @@ a.dl{color:var(--accent)}
           <label><input type="checkbox" id="showMeasured"> Measured FOV</label>
           <label title="Show coverage zones + covered/gap samples on the Front view"><input type="checkbox" id="showZones"> Coverage zones</label>
           <label><input type="checkbox" id="showTpIds"> Point IDs</label>
+          <label title="Show X/Y/Z axis direction indicators with current flip settings"><input type="checkbox" id="showAxisDir" onchange="render()"> Axis direction</label>
         </div>
         <div class="tb-cluster">
           <span class="tb-cap">Heatmap</span>
@@ -2182,6 +2183,45 @@ function draw3DScene(){
   ctx.font="bold 12px sans-serif"; ctx.fillStyle=cssVar("--accent"); ctx.textAlign="center";
   ctx.fillText("FRONT",lxf.x,lxf.y-8); ctx.fillText("REAR",lxr.x,lxr.y-8);
   ctx.textAlign="left";
+  // Axis direction indicators (coloured arrows showing current flip state)
+  if($("showAxisDir")&&$("showAxisDir").checked){
+    const f=axisFlip(), aLen=800, aHead=120;
+    const axes=[
+      {dir:{x:f.x,y:0,z:0}, col:"#ff5555", lbl:"X"},
+      {dir:{x:0,y:f.y,z:0}, col:"#55cc55", lbl:"Y"},
+      {dir:{x:0,y:0,z:f.z}, col:"#5599ff", lbl:"Z"}
+    ];
+    const orig={x:0,y:0,z:0};
+    for(const a of axes){
+      const tip={x:a.dir.x*aLen, y:a.dir.y*aLen, z:a.dir.z*aLen};
+      const neg={x:-a.dir.x*aLen, y:-a.dir.y*aLen, z:-a.dir.z*aLen};
+      // negative half (dashed, dimmer)
+      ctx.setLineDash([8,6]);
+      line3(orig,neg,a.col+"88",1.5);
+      ctx.setLineDash([]);
+      // positive half (solid)
+      line3(orig,tip,a.col,2.5);
+      // arrowhead: two short lines from the tip angled back
+      const p0=project3D(tip);
+      const pBack=project3D({x:a.dir.x*(aLen-aHead), y:a.dir.y*(aLen-aHead), z:a.dir.z*(aLen-aHead)});
+      const dx=p0.x-pBack.x, dy=p0.y-pBack.y, hl=Math.hypot(dx,dy)||1;
+      const ux=dx/hl, uy=dy/hl, px=-uy, py=ux, hw=6;
+      ctx.beginPath();
+      ctx.moveTo(p0.x-ux*14+px*hw, p0.y-uy*14+py*hw);
+      ctx.lineTo(p0.x, p0.y);
+      ctx.lineTo(p0.x-ux*14-px*hw, p0.y-uy*14-py*hw);
+      ctx.strokeStyle=a.col; ctx.lineWidth=2.5; ctx.stroke();
+      // label at tip
+      const lp=project3D({x:a.dir.x*(aLen+100), y:a.dir.y*(aLen+100), z:a.dir.z*(aLen+100)});
+      ctx.fillStyle=a.col; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
+      ctx.fillText("+"+a.lbl,lp.x,lp.y+4);
+      // label at negative end
+      const ln=project3D({x:-a.dir.x*(aLen+100), y:-a.dir.y*(aLen+100), z:-a.dir.z*(aLen+100)});
+      ctx.fillStyle=a.col+"88"; ctx.font="11px sans-serif";
+      ctx.fillText("–"+a.lbl,ln.x,ln.y+4);
+      ctx.textAlign="left";
+    }
+  }
   // Swept door envelope projected flat on the floor (z=0) — the same footprint
   // the Top view shows. Drawn before the 3D bodies so they overlay it.
   if($("showSwept") && $("showSwept").checked){
