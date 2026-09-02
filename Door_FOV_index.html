@@ -931,6 +931,23 @@ function yawPitchFromProjectedAngles(projXY, projXZ, projYZ){
   return yawPitchFromAxis(nx*f.x, ny*f.y, nz*f.z);
 }
 function fmtSA(v){ return (v>=0?"+":"")+v.toFixed(1)+"°"; }
+// Beam orthonormal frame with V-FOV perpendicular to ground at roll=0.
+// vx is the component of world-up perpendicular to the beam axis; hx completes
+// the right-handed frame. Roll rotates hx/vx around the beam axis.
+function beamFrame(ax, rollDeg){
+  const upDot=ax[2];
+  let vx=[-(upDot)*ax[0], -(upDot)*ax[1], 1-(upDot)*ax[2]];
+  let vl=Math.hypot(vx[0],vx[1],vx[2]);
+  if(vl<1e-6){ vx=[0,1,0]; vl=1; }
+  vx=[vx[0]/vl, vx[1]/vl, vx[2]/vl];
+  let hx=[ax[1]*vx[2]-ax[2]*vx[1], ax[2]*vx[0]-ax[0]*vx[2], ax[0]*vx[1]-ax[1]*vx[0]];
+  const roll=deg2rad(rollDeg||0);
+  if(roll){ const cr=Math.cos(roll), sr=Math.sin(roll);
+    const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
+    const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
+    hx=h2; vx=v2; }
+  return {hx, vx};
+}
 
 // Ray-casting point-in-polygon.
 function pointInPolygon(pt, poly){
@@ -1286,13 +1303,7 @@ function sensorFovFrame(s, door, openDeg, side){
   const apex={x:door.hingeX+s.posX, y:pose.x, z:pose.y};
   const f=pose.facing, p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
   const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];   // beam axis
-  let   hx=[cp, -Math.cos(f)*sp, -Math.sin(f)*sp]; // horizontal spread
-  let   vx=[0, -Math.sin(f), Math.cos(f)];         // vertical spread
-  const roll=deg2rad(s.rollDeg||0);
-  if(roll){ const cr=Math.cos(roll), sr=Math.sin(roll);
-    const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
-    const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
-    hx=h2; vx=v2; }
+  const {hx,vx}=beamFrame(ax, s.rollDeg);
   const maxR=Math.max(1,s.maxRangeMm||1), minR=Math.max(0,Math.min(s.minRangeMm||0,maxR));
   return { apex, ax, hx, vx,
     th:Math.tan(deg2rad((s.hFovDeg||1)/2))||1e-6,
@@ -2001,13 +2012,7 @@ function sensorConeGeom(s, door, openDeg, side, N){
   // Pitch rotates beam axis toward +X (positive = forward); keeps vx in Y-Z plane
   const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
   const ax=[sp,            Math.cos(f)*cp, Math.sin(f)*cp];  // beam axis (yaw + pitch)
-  let   hx=[cp,           -Math.cos(f)*sp,-Math.sin(f)*sp];  // fore-aft spread axis
-  let   vx=[0,            -Math.sin(f),    Math.cos(f)    ];  // elevation spread axis
-  const roll=deg2rad(s.rollDeg||0);
-  if(roll){ const cr=Math.cos(roll), sr=Math.sin(roll);
-    const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
-    const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
-    hx=h2; vx=v2; }
+  const {hx,vx}=beamFrame(ax, s.rollDeg);
   const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
   const point=(R,u,v)=>{ const dir=V.norm([
     ax[0]+th*u*hx[0]+tv*v*vx[0], ax[1]+th*u*hx[1]+tv*v*vx[1],
@@ -2109,13 +2114,7 @@ function sweptFov3dFaces(door, side){
       const f=pose.facing;
       const p=deg2rad(s.pitchDeg||0), cp=Math.cos(p), sp=Math.sin(p);
       const ax=[sp, Math.cos(f)*cp, Math.sin(f)*cp];
-      let   hx=[cp,-Math.cos(f)*sp,-Math.sin(f)*sp];
-      let   vx=[0, -Math.sin(f),    Math.cos(f)   ];
-      const rl=deg2rad(s.rollDeg||0);
-      if(rl){ const cr=Math.cos(rl), sr=Math.sin(rl);
-        const h2=[cr*hx[0]+sr*vx[0], cr*hx[1]+sr*vx[1], cr*hx[2]+sr*vx[2]];
-        const v2=[-sr*hx[0]+cr*vx[0],-sr*hx[1]+cr*vx[1],-sr*hx[2]+cr*vx[2]];
-        hx=h2; vx=v2; }
+      const {hx,vx}=beamFrame(ax, s.rollDeg);
       const th=Math.tan(deg2rad(s.hFovDeg/2)), tv=Math.tan(deg2rad(s.vFovDeg/2));
       const ring=[]; for(let i=0;i<N;i++){ const t=2*Math.PI*i/N;
         const ch=th*Math.cos(t), sv=tv*Math.sin(t), R=s.maxRangeMm;
@@ -2310,6 +2309,13 @@ function draw3DScene(){
       faces.push({ pts:zoneWorldCorners(z,side), fill:hexToRgba(z.color,0.12),
         stroke:z.color, lw:1.5, zoneLabel:z }); }
   }
+  // Map regions projected on the ground (z=0)
+  if(project.regions){
+    for(const r of project.regions){ if(!r.visible || r.points.length<3) continue;
+      faces.push({ pts:r.points.map(p=>({x:p.x,y:p.y,z:0})),
+        fill:hexToRgba(r.color, r.opacity||0.25),
+        stroke:r.color, lw:1.5, regionLabel:r }); }
+  }
   // Door photo draped on the panel (depth-sorted with everything else)
   faces=faces.concat(doorImageFaces(d, openDeg, side));
   faces.forEach(fc=>{ fc.depth=fc.pts.reduce((s,p)=>s+project3D(p).depth,0)/fc.pts.length; });
@@ -2320,6 +2326,13 @@ function draw3DScene(){
     const q=project3D(fc.pts[3]);
     ctx.fillStyle=z.color; ctx.font="11px sans-serif"; ctx.textAlign="left";
     ctx.fillText(z.name, q.x+4, q.y-4); });
+  // Region labels on the ground
+  faces.forEach(fc=>{ if(!fc.regionLabel) return; const r=fc.regionLabel;
+    const c=regionCentroid(r.points);
+    const q=project3D({x:c.x,y:c.y,z:0});
+    ctx.fillStyle=r.color; ctx.font="11px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(r.name+(r.points.length>=3?" "+(regionArea(r)/1e6).toFixed(2)+" m²":""), q.x, q.y-4);
+    ctx.textAlign="left"; });
   // A subtle centre ray gives the translucent volume a clear sensing direction.
   apexes.forEach(({s,apex,axisEnd})=>{
     if(s.showFov!==false && axisEnd) line3Fov(apex,axisEnd,sensorColor(s)+"aa",1.25);
