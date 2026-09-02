@@ -915,9 +915,9 @@ function projectedAnglesFromYawPitch(yawDeg, pitchDeg){
 // Recover beam axis from 3D Included Angles, then un-flip to get internal axis
 function yawPitchFromIncludedAngles(angX, angY, angZ){
   const f=axisFlip();
-  const ax=Math.cos(deg2rad(Math.abs(angX)))*(angX>=0?1:-1)*f.x;
-  const ay=Math.cos(deg2rad(Math.abs(angY)))*(angY>=0?1:-1)*f.y;
-  const az=Math.cos(deg2rad(Math.abs(angZ)))*(angZ>=0?1:-1)*f.z;
+  const ax=Math.cos(deg2rad(angX))*f.x;
+  const ay=Math.cos(deg2rad(angY))*f.y;
+  const az=Math.cos(deg2rad(angZ))*f.z;
   return yawPitchFromAxis(ax,ay,az);
 }
 // Recover beam axis from Projected Angles, then un-flip to get internal axis
@@ -2879,10 +2879,11 @@ function renderSensorList(){
         const yp=yawPitchFromIncludedAngles(ax,ay,az);
         s.yawDeg=yp.yawDeg; s.pitchDeg=yp.pitchDeg;
         updateYawPitchFromUI();
-        // update projected display if it's in display mode
         const prj=projectedAnglesFromYawPitch(s.yawDeg, s.pitchDeg);
         const qp=k=>d.querySelector(".ax-proj-"+k);
+        const qpi=k=>d.querySelector(".ax-proj-"+k+"-in");
         qp("xy").value=fmtSA(prj.projXY); qp("xz").value=fmtSA(prj.projXZ); qp("yz").value=fmtSA(prj.projYZ);
+        qpi("xy").value=+prj.projXY.toFixed(1); qpi("xz").value=+prj.projXZ.toFixed(1); qpi("yz").value=+prj.projYZ.toFixed(1);
         recomputeAll(); render();
       });
     });
@@ -2895,10 +2896,11 @@ function renderSensorList(){
         const yp=yawPitchFromProjectedAngles(xy,xz,yz);
         s.yawDeg=yp.yawDeg; s.pitchDeg=yp.pitchDeg;
         updateYawPitchFromUI();
-        // update included display if it's in display mode
         const inc=includedAnglesFromYawPitch(s.yawDeg, s.pitchDeg);
         const qi=k=>d.querySelector(".ax-incl-"+k);
+        const qii=k=>d.querySelector(".ax-incl-"+k+"-in");
         qi("x").value=fmtSA(inc.angX); qi("y").value=fmtSA(inc.angY); qi("z").value=fmtSA(inc.angZ);
+        qii("x").value=+inc.angX.toFixed(1); qii("y").value=+inc.angY.toFixed(1); qii("z").value=+inc.angZ.toFixed(1);
         recomputeAll(); render();
       });
     });
